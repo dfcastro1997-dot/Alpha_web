@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
 from functools import wraps
+from datetime import datetime
 import os
 
 app = Flask(__name__)
-app.secret_key = "super_clave_secreta_alpha_2026" # Requerido para las sesiones HTML
+app.secret_key = "super_clave_secreta_alpha_2026"
 
 # Base de datos en memoria (Usuarios y Registros)
-# Nota: Al reiniciar Render, los usuarios nuevos se borrarán. Para producción final se pasará a SQLite.
 usuarios_db = {
     "ADMIN": "80406651DETAIMALPHA"
 }
@@ -37,6 +37,10 @@ def login_required(f):
 def recepcion_datos():
     data = request.json
     if data:
+        # Generar marca de tiempo en el servidor si no viene en el JSON
+        if 'fecha_hora' not in data:
+            data['fecha_hora'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
         registros_globales.insert(0, data)
         return jsonify({"status": "ok", "mensaje": "Datos recibidos correctamente"}), 200
     return jsonify({"error": "Datos inválidos"}), 400
@@ -60,21 +64,34 @@ def login():
     <head>
         <title>Login | Alpha Security</title>
         <style>
-            body { background-color: #000000; font-family: 'Segoe UI', Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; color: #ffffff; }
-            .login-box { background: #ffffff; padding: 40px; border-top: 6px solid #cc0000; border-radius: 8px; width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(204,0,0,0.2); }
-            h2 { color: #cc0000; margin-top: 0; letter-spacing: 2px; }
-            p { color: #555555; font-size: 13px; font-weight: bold; margin-bottom: 25px; }
-            input { width: 90%; padding: 12px; margin: 10px 0; border: 2px solid #dddddd; border-radius: 4px; font-weight: bold; text-align: center; }
-            input:focus { border: 2px solid #000000; outline: none; }
-            button { background: #000000; color: #ffffff; border: none; padding: 14px 20px; width: 100%; border-radius: 4px; font-weight: bold; letter-spacing: 1px; cursor: pointer; margin-top: 15px; }
+            body { 
+                background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.85)), url('https://i.ibb.co/LDmTGmGn/datos.png') no-repeat center center fixed; 
+                background-size: cover;
+                font-family: 'Segoe UI', Arial, sans-serif; 
+                display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; color: #ffffff; 
+            }
+            .login-box { 
+                background: rgba(255, 255, 255, 0.95); 
+                padding: 50px 40px; 
+                border-top: 6px solid #cc0000; 
+                border-radius: 12px; 
+                width: 350px; 
+                text-align: center; 
+                box-shadow: 0 15px 35px rgba(0,0,0,0.5); 
+            }
+            .logo { width: 220px; margin-bottom: 20px; }
+            p { color: #333333; font-size: 14px; font-weight: bold; margin-bottom: 25px; letter-spacing: 1px; }
+            input { width: 90%; padding: 14px; margin: 10px 0; border: 2px solid #dddddd; border-radius: 6px; font-weight: bold; text-align: center; font-size: 14px; }
+            input:focus { border: 2px solid #000000; outline: none; background: #fafafa;}
+            button { background: #000000; color: #ffffff; border: none; padding: 16px 20px; width: 100%; border-radius: 6px; font-weight: bold; letter-spacing: 2px; cursor: pointer; margin-top: 20px; font-size: 14px; transition: background 0.3s;}
             button:hover { background: #cc0000; }
-            .error { color: #cc0000; font-size: 12px; font-weight: bold; margin-top: 15px; }
+            .error { color: #ffffff; background: #cc0000; padding: 10px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-top: 20px; }
         </style>
     </head>
     <body>
         <div class="login-box">
-            <h2>ALPHA SECURITY</h2>
-            <p>ACCESO A LA NUBE</p>
+            <img src="https://i.ibb.co/r2mMkRTq/Logo.png" alt="Alpha Security" class="logo">
+            <p>PORTAL CLOUD SYSTEM</p>
             <form method="POST">
                 <input type="text" name="username" placeholder="USUARIO" required>
                 <input type="password" name="password" placeholder="CONTRASEÑA" required>
@@ -103,88 +120,301 @@ def crear_usuario():
             usuarios_db[new_u] = new_p
     return redirect(url_for('index'))
 
-# --- 4. DASHBOARD (Tabla Profesional) ---
+# --- 4. DASHBOARD (Tabla Profesional + Gráficas + Filtros) ---
 @app.route('/', methods=['GET'])
 @login_required
 def index():
+    # --- CÁLCULOS PARA KPIS ---
+    total_registros = len(registros_globales)
+    aciertos = sum(r.get('tiros_acertados', 0) for r in registros_globales)
+    fallos = sum(r.get('tiros_fallidos', 0) for r in registros_globales)
+    total_disparos = aciertos + fallos
+    precision = round((aciertos / total_disparos * 100), 1) if total_disparos > 0 else 0
+
+    # --- CÁLCULOS PARA GRÁFICAS ---
+    tiradores_nombres = []
+    tiradores_aciertos = []
+    tiradores_fallos = []
+    
+    for r in registros_globales[:5]:
+        tiradores_nombres.append(r.get('nombre', 'Desconocido')[:15]) 
+        tiradores_aciertos.append(r.get('tiros_acertados', 0))
+        tiradores_fallos.append(r.get('tiros_fallidos', 0))
+
     html = """
     <!DOCTYPE html>
     <html>
     <head>
         <title>Dashboard | Alpha Security</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            body { background-color: #f5f5f5; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; color: #333; }
-            .navbar { background: #000000; padding: 15px 40px; color: #ffffff; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid #cc0000; }
-            .navbar h2 { margin: 0; font-size: 22px; letter-spacing: 2px; }
-            .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; }
+            body { background-color: #f0f2f5; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; color: #333; }
+            
+            /* Header / Navbar */
+            .navbar { background: #000000; padding: 15px 40px; color: #ffffff; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid #cc0000; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+            .navbar img { height: 45px; }
+            .user-info { display: flex; align-items: center; gap: 20px; }
+            .user-info span { font-size: 13px; color: #cccccc; letter-spacing: 1px; }
+            .user-info b { color: #ffffff; font-size: 15px; }
+            .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
             .btn-rojo:hover { background: #aa0000; }
-            .container { padding: 40px; max-width: 1400px; margin: 0 auto; }
-            .panel { background: #ffffff; padding: 25px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 30px; border: 1px solid #e0e0e0; border-top: 4px solid #000000; }
-            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-            th, td { padding: 15px; border-bottom: 1px solid #eeeeee; text-align: center; font-size: 14px; }
+            
+            .container { padding: 40px; max-width: 1450px; margin: 0 auto; }
+            
+            /* KPIs */
+            .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
+            .kpi-card { background: #ffffff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-left: 5px solid #cc0000; display: flex; flex-direction: column; justify-content: center; }
+            .kpi-title { font-size: 12px; color: #7f8c8d; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+            .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
+            .kpi-card:nth-child(2) { border-left-color: #000000; }
+            .kpi-card:nth-child(3) { border-left-color: #27ae60; }
+            
+            /* Layout Admin */
+            .admin-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 30px; margin-bottom: 30px; }
+            
+            /* Panels */
+            .panel { background: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+            .panel h3 { margin-top: 0; color: #000000; font-size: 16px; letter-spacing: 1px; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; margin-bottom: 20px; }
+            
+            /* Formularios */
+            .form-user { display: flex; flex-direction: column; gap: 15px; }
+            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 13px;}
+            .form-user input:focus { border: 1px solid #cc0000; outline: none; }
+            
+            /* Tablas */
+            .table-container { overflow-x: auto; background: #ffffff; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { padding: 16px; text-align: center; font-size: 13px; }
             th { background-color: #000000; color: #ffffff; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
-            tr:hover { background-color: #fff0f0; }
-            .form-user { display: flex; gap: 15px; margin-top: 15px;}
-            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; flex: 1; font-weight: bold; }
-            .form-user input:focus { border: 1px solid #000000; outline: none; }
-            .acierto { color: #27ae60; font-weight: bold; }
-            .fallo { color: #cc0000; font-weight: bold; }
+            td { border-bottom: 1px solid #eeeeee; }
+            tr:hover { background-color: #fafafa; }
+            
+            .badge-acierto { background-color: #e8f8f5; color: #27ae60; padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 14px; }
+            .badge-fallo { background-color: #fdedec; color: #cc0000; padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 14px; }
+            .badge-total { background-color: #f4f6f7; color: #34495e; padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 14px; border: 1px solid #d5dbdb;}
+            
+            /* Inputs de Filtro en Tabla */
+            .filter-row th { background-color: #1a1a1a; padding: 8px; border-top: 1px solid #333; }
+            .filter-input { width: 85%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #0a0a0a; color: #fff; font-size: 11px; font-weight: bold; text-align: center; }
+            .filter-input::placeholder { color: #888; }
+            .filter-input:focus { border-color: #cc0000; outline: none; background: #222; }
+
+            /* Charts */
+            .charts-wrapper { display: flex; gap: 20px; height: 250px; }
+            .chart-box { flex: 1; position: relative; }
         </style>
     </head>
     <body>
         <div class="navbar">
-            <h2>ALPHA <span style="color:#cc0000;">SECURITY</span></h2>
-            <div>
-                <span style="margin-right: 20px; font-size: 14px;">OPERADOR: <b>{{ current_user }}</b></span>
+            <img src="https://i.ibb.co/r2mMkRTq/Logo.png" alt="Alpha Security">
+            <div class="user-info">
+                <span>CONECTADO COMO: <b>{{ current_user }}</b></span>
                 <a href="/logout" class="btn-rojo">CERRAR SESIÓN</a>
             </div>
         </div>
+        
         <div class="container">
-            
+            <!-- 1. Cajas de KPI -->
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <span class="kpi-title">TOTAL REGISTROS EN NUBE</span>
+                    <h2 class="kpi-value">{{ kpis.registros }}</h2>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-title">MUNICIÓN TOTAL USADA</span>
+                    <h2 class="kpi-value">{{ kpis.disparos }}</h2>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-title">EFECTIVIDAD GLOBAL</span>
+                    <h2 class="kpi-value" style="color: #27ae60;">{{ kpis.precision }}%</h2>
+                </div>
+                <div class="kpi-card" style="border-left-color: #34495e;">
+                    <span class="kpi-title">ESTADO SERVIDOR</span>
+                    <h2 class="kpi-value" style="color: #34495e; font-size: 24px; margin-top: 8px;">EN LÍNEA 🟢</h2>
+                </div>
+            </div>
+
+            <!-- 2. Sección Exclusiva Admin (Gráficas y Creación de Usuarios) -->
             {% if current_user == 'ADMIN' %}
-            <div class="panel" style="border-top: 4px solid #cc0000;">
-                <h3 style="margin-top: 0; color: #cc0000;">⚙️ GESTIÓN DE PERFILES WEB</h3>
-                <p style="color: #777; font-size: 13px;">Añada sub-usuarios para que puedan acceder a este panel. (Se borrarán al reiniciar el servidor en versión Lite).</p>
-                <form class="form-user" method="POST" action="/crear_usuario">
-                    <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
-                    <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
-                    <button type="submit" class="btn-rojo" style="padding: 0 30px;">REGISTRAR</button>
-                </form>
+            <div class="admin-grid">
+                <div class="panel" style="border-top: 4px solid #cc0000;">
+                    <h3 style="color: #cc0000;">⚙️ GESTIÓN DE PERFILES WEB</h3>
+                    <p style="color: #777; font-size: 12px; margin-bottom: 20px;">Añada operadores para acceder al panel. (Requiere DB persistente para guardar permanentemente).</p>
+                    <form class="form-user" method="POST" action="/crear_usuario">
+                        <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
+                        <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
+                        <button type="submit" class="btn-rojo">REGISTRAR ACCESO</button>
+                    </form>
+                </div>
+                
+                <div class="panel">
+                    <h3>📊 ANÁLISIS DE RENDIMIENTO (Últimas 5 Sesiones)</h3>
+                    <div class="charts-wrapper">
+                        <div class="chart-box">
+                            <canvas id="hitMissChart"></canvas>
+                        </div>
+                        <div class="chart-box" style="flex: 2;">
+                            <canvas id="barChart"></canvas>
+                        </div>
+                    </div>
+                </div>
             </div>
             {% endif %}
 
-            <div class="panel">
-                <h3 style="margin-top: 0; color: #000000;">🎯 BASE DE DATOS DE IMPACTOS EN VIVO</h3>
-                <table>
-                    <tr>
-                        <th>ID Equipo</th>
-                        <th>Identificación</th>
-                        <th>Tirador</th>
-                        <th>Misión / Escenario</th>
-                        <th>Armamento</th>
-                        <th>Impactos</th>
-                        <th>Fallos</th>
-                    </tr>
-                    {% for r in registros %}
-                    <tr>
-                        <td><strong>{{ r.id_alpha }}</strong></td>
-                        <td>{{ r.numero_cedula }}</td>
-                        <td>{{ r.nombre }}</td>
-                        <td>{{ r.nombre_ejercicio }}</td>
-                        <td>{{ r.tipo_arma }}</td>
-                        <td class="acierto">{{ r.tiros_acertados }}</td>
-                        <td class="fallo">{{ r.tiros_fallidos }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="7" style="color: #aaaaaa; padding: 40px; font-style: italic;">No se han recibido transmisiones balísticas recientes.</td></tr>
-                    {% endfor %}
+            <!-- 3. Tabla de Datos -->
+            <div class="table-container">
+                <table id="dataTable">
+                    <thead>
+                        <tr>
+                            <th>ID Equipo</th>
+                            <th>Fecha y Hora</th>
+                            <th>Identificación</th>
+                            <th>Tirador</th>
+                            <th>Misión / Escenario</th>
+                            <th>Armamento</th>
+                            <th>Impactos</th>
+                            <th>Fallos</th>
+                            <th>Total</th>
+                        </tr>
+                        <!-- FILA DE FILTROS BÚSQUEDA EN TIEMPO REAL -->
+                        <tr class="filter-row">
+                            <th><input type="text" class="filter-input" data-col="0" placeholder="🔍 Buscar ID..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="1" placeholder="🔍 Buscar Fecha..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="2" placeholder="🔍 Buscar Cédula..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="3" placeholder="🔍 Buscar Tirador..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="4" placeholder="🔍 Buscar Misión..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="5" placeholder="🔍 Buscar Arma..." onkeyup="filterTable()"></th>
+                            <th></th>
+                            <th></th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in registros %}
+                        <tr class="data-row">
+                            <td><b>{{ r.id_alpha }}</b></td>
+                            <td style="color: #7f8c8d; font-family: 'Consolas', monospace; font-size: 12px;"><b>{{ r.fecha_hora }}</b></td>
+                            <td style="color: #7f8c8d;">{{ r.numero_cedula }}</td>
+                            <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
+                            <td style="font-weight: bold;">{{ r.nombre_ejercicio }}</td>
+                            <td>{{ r.tipo_arma }}</td>
+                            <td><span class="badge-acierto">{{ r.tiros_acertados }}</span></td>
+                            <td><span class="badge-fallo">{{ r.tiros_fallidos }}</span></td>
+                            <!-- COLUMNA TOTAL (Aciertos + Fallos) -->
+                            <td><span class="badge-total">{{ r.tiros_acertados + r.tiros_fallidos }}</span></td>
+                        </tr>
+                        {% else %}
+                        <tr class="no-data"><td colspan="9" style="color: #aaaaaa; padding: 40px; font-style: italic;">No se han recibido transmisiones balísticas en la nube.</td></tr>
+                        {% endfor %}
+                    </tbody>
                 </table>
             </div>
         </div>
+
+        <!-- SCRIPTS JS -->
+        <script>
+            // FUNCIÓN PROFESIONAL DE FILTRADO MULTI-COLUMNA
+            function filterTable() {
+                const table = document.getElementById('dataTable');
+                const tr = table.querySelectorAll('tbody tr.data-row');
+                const inputs = document.querySelectorAll('.filter-input');
+
+                tr.forEach(row => {
+                    let showRow = true;
+                    
+                    inputs.forEach((input) => {
+                        const colIdx = input.getAttribute('data-col');
+                        const filterValue = input.value.toLowerCase();
+                        const cell = row.cells[colIdx];
+                        
+                        if (cell) {
+                            const cellText = cell.textContent || cell.innerText;
+                            if (cellText.toLowerCase().indexOf(filterValue) === -1) {
+                                showRow = false;
+                            }
+                        }
+                    });
+                    
+                    row.style.display = showRow ? '' : 'none';
+                });
+            }
+        </script>
+
+        {% if current_user == 'ADMIN' %}
+        <script>
+            // Datos Inyectados desde Python para Charts
+            const aciertosTotales = {{ kpis.aciertos }};
+            const fallosTotales = {{ kpis.fallos }};
+            const labelsTiradores = {{ charts.nombres | safe }};
+            const dataAciertos = {{ charts.aciertos | safe }};
+            const dataFallos = {{ charts.fallos | safe }};
+
+            // 1. Gráfica de Dona
+            const ctxDona = document.getElementById('hitMissChart').getContext('2d');
+            new Chart(ctxDona, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Aciertos', 'Fallos'],
+                    datasets: [{
+                        data: [aciertosTotales, fallosTotales],
+                        backgroundColor: ['#000000', '#cc0000'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11} } }
+                    },
+                    cutout: '70%'
+                }
+            });
+
+            // 2. Gráfica de Barras
+            const ctxBarras = document.getElementById('barChart').getContext('2d');
+            new Chart(ctxBarras, {
+                type: 'bar',
+                data: {
+                    labels: labelsTiradores.length > 0 ? labelsTiradores : ['Sin Datos'],
+                    datasets: [
+                        { label: 'Aciertos', data: dataAciertos.length > 0 ? dataAciertos : [0], backgroundColor: '#000000', borderRadius: 4 },
+                        { label: 'Fallos', data: dataFallos.length > 0 ? dataFallos : [0], backgroundColor: '#cc0000', borderRadius: 4 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: '#eee' } },
+                        x: { grid: { display: false } }
+                    },
+                    plugins: {
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11} } }
+                    }
+                }
+            });
+        </script>
+        {% endif %}
     </body>
     </html>
     """
-    return render_template_string(html, registros=registros_globales, current_user=session.get('user'))
+    
+    # Preparar datos para inyectar en el template HTML
+    kpis = {
+        "registros": total_registros,
+        "disparos": total_disparos,
+        "precision": precision,
+        "aciertos": aciertos,
+        "fallos": fallos
+    }
+    charts = {
+        "nombres": tiradores_nombres,
+        "aciertos": tiradores_aciertos,
+        "fallos": tiradores_fallos
+    }
+
+    return render_template_string(html, registros=registros_globales, current_user=session.get('user'), kpis=kpis, charts=charts)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
