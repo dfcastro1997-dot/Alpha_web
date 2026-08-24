@@ -9,7 +9,7 @@ app = Flask(__name__)
 app.secret_key = "super_clave_secreta_alpha_2026"
 
 # --- CONEXIÓN A AIVEN (POSTGRESQL) ---
-# CORRECCIÓN: Debe llamarse "DATABASE_URL" que es la KEY que configuraste en Render.
+# CORRECCIÓN: Usamos exactamente el nombre de la variable de entorno configurada en Render
 DB_URI = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
@@ -152,7 +152,7 @@ def login():
                 box-shadow: 0 15px 35px rgba(0,0,0,0.5); 
             }
             .logo { width: 220px; margin-bottom: 20px; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.3)); }
-            p { color: #333333; font-size: 14px; font-weight: bold; margin-bottom: 25px; letter-spacing: 1px; }
+            p { color: #000000; font-size: 14px; font-weight: bold; margin-bottom: 25px; letter-spacing: 1px; }
             input { width: 90%; padding: 14px; margin: 10px 0; border: 2px solid #dddddd; border-radius: 6px; font-weight: bold; text-align: center; font-size: 14px; color: #000000;}
             input:focus { border: 2px solid #000000; outline: none; background: #fafafa;}
             button { background: #000000; color: #ffffff; border: none; padding: 16px 20px; width: 100%; border-radius: 6px; font-weight: bold; letter-spacing: 2px; cursor: pointer; margin-top: 20px; font-size: 14px; transition: background 0.3s;}
@@ -169,7 +169,11 @@ def login():
                 <input type="password" name="password" placeholder="CONTRASEÑA" required>
                 <button type="submit">INICIAR SESIÓN</button>
             </form>
-            {% if error %}<div class="error">❌ {{ error }}</div>{% endif %}
+            {% if error %}
+            <div class="error">
+                <span style="font-weight:bold;">ERROR:</span> {{ error }}
+            </div>
+            {% endif %}
         </div>
     </body>
     </html>
@@ -237,56 +241,57 @@ def index():
         <title>Dashboard | Alpha Security</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            body { background-color: #f0f2f5; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; color: #333; }
+            body { background-color: #f0f2f5; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; color: #000000; }
             
-            /* Header / Navbar en Blanco */
+            /* Header / Navbar en Blanco y Rojo */
             .navbar { background: #ffffff; padding: 15px 40px; color: #000000; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid #cc0000; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
             .navbar img { height: 45px; filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.2)); } 
             .user-info { display: flex; align-items: center; gap: 20px; }
             .user-info span { font-size: 13px; color: #555555; letter-spacing: 1px; }
             .user-info b { color: #000000; font-size: 15px; }
-            .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
-            .btn-rojo:hover { background: #aa0000; }
+            .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
+            .btn-rojo:hover { background: #000000; }
             
             .container { padding: 40px; max-width: 1450px; margin: 0 auto; }
             
             /* KPIs */
             .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
-            .kpi-card { background: #ffffff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-left: 5px solid #cc0000; display: flex; flex-direction: column; justify-content: center; }
-            .kpi-title { font-size: 12px; color: #7f8c8d; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+            .kpi-card { background: #ffffff; padding: 25px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-left: 5px solid #000000; display: flex; flex-direction: column; justify-content: center; }
+            .kpi-card:nth-child(1) { border-left-color: #cc0000; }
+            .kpi-card:nth-child(3) { border-left-color: #cc0000; }
+            .kpi-title { font-size: 12px; color: #555555; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
             .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
-            .kpi-card:nth-child(2) { border-left-color: #000000; }
-            .kpi-card:nth-child(3) { border-left-color: #27ae60; }
             
             /* Layout Admin */
             .admin-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 30px; margin-bottom: 30px; }
             
             /* Panels */
-            .panel { background: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
-            .panel h3 { margin-top: 0; color: #000000; font-size: 16px; letter-spacing: 1px; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; margin-bottom: 20px; }
+            .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; }
+            .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
             
             /* Formularios */
             .form-user { display: flex; flex-direction: column; gap: 15px; }
-            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 13px; color: #000;}
+            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 13px; color: #000000;}
             .form-user input:focus { border: 1px solid #cc0000; outline: none; }
             
-            /* Tablas en Blanco con texto negro */
-            .table-container { overflow-x: auto; background: #ffffff; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #cc0000; }
+            /* Tablas Blanco/Negro/Rojo */
+            .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; }
             th, td { padding: 16px; text-align: center; font-size: 13px; }
-            th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #eeeeee; }
-            td { border-bottom: 1px solid #eeeeee; color: #333333; }
-            tr:hover { background-color: #fafafa; }
+            th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #000000; }
+            td { border-bottom: 1px solid #eeeeee; color: #000000; font-weight: 500; }
+            tr:hover { background-color: #f9f9f9; }
             
-            .badge-acierto { background-color: #e8f8f5; color: #27ae60; padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 14px; }
-            .badge-fallo { background-color: #fdedec; color: #cc0000; padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 14px; }
-            .badge-total { background-color: #f4f6f7; color: #34495e; padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 14px; border: 1px solid #d5dbdb;}
+            /* Badges de Impactos */
+            .badge-acierto { background-color: #000000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
+            .badge-fallo { background-color: #cc0000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
+            .badge-total { background-color: #ffffff; color: #000000; padding: 5px 13px; border-radius: 4px; font-weight: bold; font-size: 13px; border: 2px solid #000000;}
             
-            /* Inputs de Filtro en Tabla (Grises claros) */
-            .filter-row th { background-color: #f9f9f9; padding: 10px 8px; border-top: 1px solid #eeeeee; border-bottom: 2px solid #dddddd; }
-            .filter-input { width: 85%; padding: 8px; border: 1px solid #cccccc; border-radius: 4px; background: #ffffff; color: #000000; font-size: 11px; font-weight: bold; text-align: center; }
-            .filter-input::placeholder { color: #999999; }
-            .filter-input:focus { border-color: #cc0000; outline: none; box-shadow: 0 0 5px rgba(204,0,0,0.1); }
+            /* Inputs de Filtro en Tabla sin Emojis */
+            .filter-row th { background-color: #f5f5f5; padding: 10px 8px; border-bottom: 2px solid #dddddd; }
+            .filter-input { width: 85%; padding: 8px; border: 1px solid #cccccc; border-radius: 4px; background: #ffffff; color: #000000; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase; }
+            .filter-input::placeholder { color: #888888; }
+            .filter-input:focus { border-color: #cc0000; outline: none; box-shadow: 0 0 5px rgba(204,0,0,0.2); }
 
             /* Charts */
             .charts-wrapper { display: flex; gap: 20px; height: 250px; }
@@ -315,11 +320,11 @@ def index():
                 </div>
                 <div class="kpi-card">
                     <span class="kpi-title">EFECTIVIDAD GLOBAL</span>
-                    <h2 class="kpi-value" style="color: #27ae60;">{{ kpis.precision }}%</h2>
+                    <h2 class="kpi-value">{{ kpis.precision }}%</h2>
                 </div>
-                <div class="kpi-card" style="border-left-color: #34495e;">
-                    <span class="kpi-title">ESTADO BD AIVEN</span>
-                    <h2 class="kpi-value" style="color: #34495e; font-size: 24px; margin-top: 8px;">CONECTADO 🟢</h2>
+                <div class="kpi-card">
+                    <span class="kpi-title">ESTADO SERVIDOR</span>
+                    <h2 class="kpi-value" style="font-size: 24px; margin-top: 8px;">ACTIVO</h2>
                 </div>
             </div>
 
@@ -327,8 +332,8 @@ def index():
             {% if current_user == 'ADMIN' %}
             <div class="admin-grid">
                 <div class="panel" style="border-top: 4px solid #cc0000;">
-                    <h3 style="color: #cc0000;">⚙️ GESTIÓN DE PERFILES WEB</h3>
-                    <p style="color: #777; font-size: 12px; margin-bottom: 20px;">Añada operadores para acceder al panel. (Guardados en PostgreSQL).</p>
+                    <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
+                    <p style="color: #555555; font-size: 12px; margin-bottom: 20px;">Añada operadores para acceder al panel. (Guardados en base de datos).</p>
                     <form class="form-user" method="POST" action="/crear_usuario">
                         <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
                         <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
@@ -337,7 +342,7 @@ def index():
                 </div>
                 
                 <div class="panel">
-                    <h3>📊 ANÁLISIS DE RENDIMIENTO (Últimas 5 Sesiones)</h3>
+                    <h3>ANÁLISIS DE RENDIMIENTO (Últimas 5 Sesiones)</h3>
                     <div class="charts-wrapper">
                         <div class="chart-box">
                             <canvas id="hitMissChart"></canvas>
@@ -367,12 +372,12 @@ def index():
                         </tr>
                         <!-- FILA DE FILTROS BÚSQUEDA EN TIEMPO REAL -->
                         <tr class="filter-row">
-                            <th><input type="text" class="filter-input" data-col="0" placeholder="🔍 Buscar ID..." onkeyup="filterTable()"></th>
-                            <th><input type="text" class="filter-input" data-col="1" placeholder="🔍 Buscar Fecha..." onkeyup="filterTable()"></th>
-                            <th><input type="text" class="filter-input" data-col="2" placeholder="🔍 Buscar Cédula..." onkeyup="filterTable()"></th>
-                            <th><input type="text" class="filter-input" data-col="3" placeholder="🔍 Buscar Tirador..." onkeyup="filterTable()"></th>
-                            <th><input type="text" class="filter-input" data-col="4" placeholder="🔍 Buscar Misión..." onkeyup="filterTable()"></th>
-                            <th><input type="text" class="filter-input" data-col="5" placeholder="🔍 Buscar Arma..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="0" placeholder="BUSCAR ID..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="1" placeholder="BUSCAR FECHA..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="2" placeholder="BUSCAR CÉDULA..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="3" placeholder="BUSCAR TIRADOR..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="4" placeholder="BUSCAR MISIÓN..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="5" placeholder="BUSCAR ARMA..." onkeyup="filterTable()"></th>
                             <th></th>
                             <th></th>
                             <th></th>
@@ -382,18 +387,18 @@ def index():
                         {% for r in registros %}
                         <tr class="data-row">
                             <td><b>{{ r.id_alpha }}</b></td>
-                            <td style="color: #7f8c8d; font-family: 'Consolas', monospace; font-size: 12px;"><b>{{ r.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if r.fecha_hora else '' }}</b></td>
-                            <td style="color: #7f8c8d;">{{ r.numero_cedula }}</td>
+                            <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 12px; font-weight:bold;">{{ r.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if r.fecha_hora else '' }}</td>
+                            <td style="color: #555555; font-weight: bold;">{{ r.numero_cedula }}</td>
                             <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
                             <td style="font-weight: bold;">{{ r.nombre_ejercicio }}</td>
-                            <td>{{ r.tipo_arma }}</td>
+                            <td style="font-weight: bold;">{{ r.tipo_arma }}</td>
                             <td><span class="badge-acierto">{{ r.tiros_acertados }}</span></td>
                             <td><span class="badge-fallo">{{ r.tiros_fallidos }}</span></td>
                             <!-- COLUMNA TOTAL (Aciertos + Fallos) -->
                             <td><span class="badge-total">{{ r.tiros_acertados + r.tiros_fallidos }}</span></td>
                         </tr>
                         {% else %}
-                        <tr class="no-data"><td colspan="9" style="color: #aaaaaa; padding: 40px; font-style: italic;">No se han recibido transmisiones balísticas en la base de datos de Aiven.</td></tr>
+                        <tr class="no-data"><td colspan="9" style="color: #555555; padding: 40px; font-style: italic; font-weight: bold;">NO SE HAN RECIBIDO TRANSMISIONES BALÍSTICAS.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -402,7 +407,7 @@ def index():
 
         <!-- SCRIPTS JS -->
         <script>
-            // FUNCIÓN PROFESIONAL DE FILTRADO MULTI-COLUMNA
+            // FUNCIÓN DE FILTRADO MULTI-COLUMNA EN TIEMPO REAL
             function filterTable() {
                 const table = document.getElementById('dataTable');
                 const tr = table.querySelectorAll('tbody tr.data-row');
@@ -454,7 +459,7 @@ def index():
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11} } }
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11, weight: 'bold'}, color: '#000' } }
                     },
                     cutout: '70%'
                 }
@@ -475,11 +480,11 @@ def index():
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        y: { beginAtZero: true, grid: { color: '#eee' } },
-                        x: { grid: { display: false } }
+                        y: { beginAtZero: true, grid: { color: '#eeeeee' }, ticks: { color: '#000', font: {weight: 'bold'} } },
+                        x: { grid: { display: false }, ticks: { color: '#000', font: {weight: 'bold'} } }
                     },
                     plugins: {
-                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11} } }
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11, weight: 'bold'}, color: '#000' } }
                     }
                 }
             });
