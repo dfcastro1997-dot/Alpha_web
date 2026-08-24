@@ -9,12 +9,12 @@ app = Flask(__name__)
 app.secret_key = "super_clave_secreta_alpha_2026"
 
 # --- CONEXIÓN A AIVEN (POSTGRESQL) ---
-# Toma la URL de conexión desde Render. Si no existe, lanza un error para avisarte.
-DB_URI = os.environ.get("pg-27ca4201-cuenta-043a.j.aivencloud.com")
+# CORRECCIÓN: Debe llamarse "DATABASE_URL" que es la KEY que configuraste en Render.
+DB_URI = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
     if not DB_URI:
-        raise ValueError("Falta configurar la variable DATABASE_URL con la conexión a Aiven")
+        raise ValueError("Falta configurar la variable DATABASE_URL en Render con la conexión a Aiven")
     return psycopg2.connect(DB_URI)
 
 # --- INICIALIZAR TABLAS EN AIVEN ---
