@@ -10,7 +10,7 @@ app.secret_key = "super_clave_secreta_alpha_2026"
 
 # --- CONEXIÓN A AIVEN (POSTGRESQL) ---
 # Toma la URL de conexión desde Render. Si no existe, lanza un error para avisarte.
-DB_URI = os.environ.get("DATABASE_URL")
+DB_URI = os.environ.get("pg-27ca4201-cuenta-043a.j.aivencloud.com")
 
 def get_db_connection():
     if not DB_URI:
