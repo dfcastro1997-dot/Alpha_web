@@ -1,23 +1,79 @@
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
 from functools import wraps
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import os
 
 app = Flask(__name__)
 app.secret_key = "super_clave_secreta_alpha_2026"
 
-# Base de datos en memoria (Usuarios y Registros)
-usuarios_db = {
-    "ADMIN": "80406651DETAIMALPHA"
-}
-registros_globales = []
+# --- CONEXIÓN A AIVEN (POSTGRESQL) ---
+# Toma la URL de conexión desde Render. Si no existe, lanza un error para avisarte.
+DB_URI = os.environ.get("DATABASE_URL")
+
+def get_db_connection():
+    if not DB_URI:
+        raise ValueError("Falta configurar la variable DATABASE_URL con la conexión a Aiven")
+    return psycopg2.connect(DB_URI)
+
+# --- INICIALIZAR TABLAS EN AIVEN ---
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Crear tabla de usuarios web
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            username VARCHAR(50) PRIMARY KEY,
+            password VARCHAR(100) NOT NULL
+        )
+    ''')
+    # Crear administrador por defecto si no existe
+    cur.execute('''
+        INSERT INTO usuarios (username, password) 
+        VALUES ('ADMIN', '80406651DETAIMALPHA') 
+        ON CONFLICT (username) DO NOTHING
+    ''')
+    # Crear tabla de registros balísticos
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS registros (
+            id SERIAL PRIMARY KEY,
+            id_alpha VARCHAR(50),
+            fecha_hora TIMESTAMP,
+            numero_cedula VARCHAR(50),
+            nombre VARCHAR(150),
+            nombre_ejercicio VARCHAR(150),
+            tipo_arma VARCHAR(50),
+            tiros_acertados INT,
+            tiros_fallidos INT
+        )
+    ''')
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# Ejecutar creación de tablas al arrancar
+init_db()
+
+# --- VALIDACIÓN DE USUARIOS EN BASE DE DATOS ---
+def check_auth(username, password):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT password FROM usuarios WHERE username = %s", (username,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if user and user['password'] == password:
+        return True
+    return False
 
 # --- MIDDLEWARE PARA LA API (Software de Escritorio) ---
 def requires_api_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
-        if not auth or auth.username not in usuarios_db or usuarios_db[auth.username] != auth.password:
+        if not auth or not check_auth(auth.username, auth.password):
             return jsonify({"error": "No autorizado"}), 401
         return f(*args, **kwargs)
     return decorated
@@ -31,18 +87,34 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- 1. ENDPOINT API (Recibe los datos silenciosamente) ---
+# --- 1. ENDPOINT API (Recibe los datos silenciosamente y los guarda en Aiven) ---
 @app.route('/api/recepcion', methods=['POST'])
 @requires_api_auth
 def recepcion_datos():
     data = request.json
     if data:
-        # Generar marca de tiempo en el servidor si no viene en el JSON
-        if 'fecha_hora' not in data:
-            data['fecha_hora'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-        registros_globales.insert(0, data)
-        return jsonify({"status": "ok", "mensaje": "Datos recibidos correctamente"}), 200
+        fecha_hora = data.get('fecha_hora', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO registros 
+            (id_alpha, fecha_hora, numero_cedula, nombre, nombre_ejercicio, tipo_arma, tiros_acertados, tiros_fallidos)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            data.get('id_alpha', 'DESCONOCIDO'),
+            fecha_hora,
+            data.get('numero_cedula', 'N/A'),
+            data.get('nombre', 'N/A'),
+            data.get('nombre_ejercicio', 'N/A'),
+            data.get('tipo_arma', 'N/A'),
+            data.get('tiros_acertados', 0),
+            data.get('tiros_fallidos', 0)
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "mensaje": "Datos guardados en PostgreSQL exitosamente"}), 200
     return jsonify({"error": "Datos inválidos"}), 400
 
 # --- 2. PÁGINA DE LOGIN HTML ---
@@ -52,7 +124,7 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        if username in usuarios_db and usuarios_db[username] == password:
+        if check_auth(username, password):
             session['user'] = username
             return redirect(url_for('index'))
         else:
@@ -109,7 +181,7 @@ def logout():
     session.pop('user', None)
     return redirect(url_for('login'))
 
-# --- 3. CREAR NUEVO USUARIO WEB (Solo ADMIN) ---
+# --- 3. CREAR NUEVO USUARIO WEB EN AIVEN (Solo ADMIN) ---
 @app.route('/crear_usuario', methods=['POST'])
 @login_required
 def crear_usuario():
@@ -117,13 +189,30 @@ def crear_usuario():
         new_u = request.form.get('new_user')
         new_p = request.form.get('new_password')
         if new_u and new_p:
-            usuarios_db[new_u] = new_p
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('''
+                INSERT INTO usuarios (username, password) 
+                VALUES (%s, %s) 
+                ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password
+            ''', (new_u.upper(), new_p))
+            conn.commit()
+            cur.close()
+            conn.close()
     return redirect(url_for('index'))
 
 # --- 4. DASHBOARD (Tabla Profesional + Gráficas + Filtros) ---
 @app.route('/', methods=['GET'])
 @login_required
 def index():
+    # Obtener todos los registros desde PostgreSQL
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM registros ORDER BY id DESC")
+    registros_globales = cur.fetchall()
+    cur.close()
+    conn.close()
+
     # --- CÁLCULOS PARA KPIS ---
     total_registros = len(registros_globales)
     aciertos = sum(r.get('tiros_acertados', 0) for r in registros_globales)
@@ -152,7 +241,7 @@ def index():
             
             /* Header / Navbar en Blanco */
             .navbar { background: #ffffff; padding: 15px 40px; color: #000000; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid #cc0000; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-            .navbar img { height: 45px; filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.2)); } /* Sombra sutil para legibilidad del logo */
+            .navbar img { height: 45px; filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.2)); } 
             .user-info { display: flex; align-items: center; gap: 20px; }
             .user-info span { font-size: 13px; color: #555555; letter-spacing: 1px; }
             .user-info b { color: #000000; font-size: 15px; }
@@ -229,8 +318,8 @@ def index():
                     <h2 class="kpi-value" style="color: #27ae60;">{{ kpis.precision }}%</h2>
                 </div>
                 <div class="kpi-card" style="border-left-color: #34495e;">
-                    <span class="kpi-title">ESTADO SERVIDOR</span>
-                    <h2 class="kpi-value" style="color: #34495e; font-size: 24px; margin-top: 8px;">EN LÍNEA 🟢</h2>
+                    <span class="kpi-title">ESTADO BD AIVEN</span>
+                    <h2 class="kpi-value" style="color: #34495e; font-size: 24px; margin-top: 8px;">CONECTADO 🟢</h2>
                 </div>
             </div>
 
@@ -239,7 +328,7 @@ def index():
             <div class="admin-grid">
                 <div class="panel" style="border-top: 4px solid #cc0000;">
                     <h3 style="color: #cc0000;">⚙️ GESTIÓN DE PERFILES WEB</h3>
-                    <p style="color: #777; font-size: 12px; margin-bottom: 20px;">Añada operadores para acceder al panel. (Requiere DB persistente para guardar permanentemente).</p>
+                    <p style="color: #777; font-size: 12px; margin-bottom: 20px;">Añada operadores para acceder al panel. (Guardados en PostgreSQL).</p>
                     <form class="form-user" method="POST" action="/crear_usuario">
                         <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
                         <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
@@ -293,7 +382,7 @@ def index():
                         {% for r in registros %}
                         <tr class="data-row">
                             <td><b>{{ r.id_alpha }}</b></td>
-                            <td style="color: #7f8c8d; font-family: 'Consolas', monospace; font-size: 12px;"><b>{{ r.fecha_hora }}</b></td>
+                            <td style="color: #7f8c8d; font-family: 'Consolas', monospace; font-size: 12px;"><b>{{ r.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if r.fecha_hora else '' }}</b></td>
                             <td style="color: #7f8c8d;">{{ r.numero_cedula }}</td>
                             <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
                             <td style="font-weight: bold;">{{ r.nombre_ejercicio }}</td>
@@ -304,7 +393,7 @@ def index():
                             <td><span class="badge-total">{{ r.tiros_acertados + r.tiros_fallidos }}</span></td>
                         </tr>
                         {% else %}
-                        <tr class="no-data"><td colspan="9" style="color: #aaaaaa; padding: 40px; font-style: italic;">No se han recibido transmisiones balísticas en la nube.</td></tr>
+                        <tr class="no-data"><td colspan="9" style="color: #aaaaaa; padding: 40px; font-style: italic;">No se han recibido transmisiones balísticas en la base de datos de Aiven.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
