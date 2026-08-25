@@ -348,8 +348,15 @@ def index():
     if usuario_logeado == 'ADMIN':
         cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
         lista_usuarios = cur.fetchall()
-        # SELECCIÓN ACTUALIZADA INCLUYENDO LOS NUEVOS CAMPOS
-        cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, correo, numero_celular, afinidad_seguridad, (foto_b64 IS NOT NULL AND foto_b64 != '') as tiene_foto FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 20")
+        
+        # SELECCIÓN ACTUALIZADA INCLUYENDO LOS NUEVOS CAMPOS Y SIN LÍMITE (TRAE TODOS PARA EL DIRECTORIO)
+        cur.execute('''
+            SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, 
+                   correo, numero_celular, afinidad_seguridad, fecha_creacion, 
+                   (foto_b64 IS NOT NULL AND foto_b64 != '') as tiene_foto 
+            FROM tiradores_web 
+            ORDER BY fecha_creacion DESC
+        ''')
         lista_tiradores = cur.fetchall()
 
     cur.close()
@@ -399,6 +406,17 @@ def index():
             .form-user input, .form-user select { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
             .form-user input[type="date"] { font-family: 'Segoe UI', Arial, sans-serif; cursor: pointer; text-transform: uppercase;}
             .form-user input:focus, .form-user select:focus { border: 1px solid #cc0000; outline: none; }
+            
+            /* TABS CSS */
+            .tabs-container { margin-top: 10px; }
+            .tabs-nav { display: flex; border-bottom: 2px solid #eeeeee; margin-bottom: 20px; }
+            .tab-btn { background: none; border: none; padding: 12px 20px; font-size: 12px; font-weight: bold; color: #777777; cursor: pointer; text-transform: uppercase; transition: color 0.3s; }
+            .tab-btn:hover { color: #000000; }
+            .tab-btn.active { color: #cc0000; border-bottom: 3px solid #cc0000; margin-bottom: -2px; }
+            .tab-content { display: none; animation: fadeEffect 0.5s; }
+            .tab-content.active { display: block; }
+            @keyframes fadeEffect { from {opacity: 0;} to {opacity: 1;} }
+
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; min-width: 800px; }
             th, td { padding: 16px; text-align: center; font-size: 12px; }
@@ -488,91 +506,111 @@ def index():
                     </div>
                 </div>
 
-                <!-- Panel 2: Pre-Registro de Tiradores ACTUALIZADO CON CAMPOS NUEVOS -->
+                <!-- Panel 2: Pre-Registro de Tiradores ACTUALIZADO CON TABS -->
                 <div class="panel" style="border-top: 4px solid #000000;">
-                    <h3>PRE-REGISTRO DE TIRADORES (NUBE A LOCAL)</h3>
-                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos completos, fotografía remota e información de contacto del Admin.</p>
+                    <h3>GESTIÓN DE TIRADORES (PRE-REGISTRO EN LA NUBE)</h3>
                     
-                    <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
-                        <!-- DATOS BÁSICOS QUE VIAJAN AL LOCAL -->
-                        <div style="display: flex; gap: 15px;">
-                            <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" style="flex: 1;" required>
-                            <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" style="flex: 2;" required>
+                    <div class="tabs-container">
+                        <!-- Botones Tabs -->
+                        <div class="tabs-nav">
+                            <button class="tab-btn active" onclick="openTab(event, 'tab-form')">NUEVO REGISTRO</button>
+                            <button class="tab-btn" onclick="openTab(event, 'tab-list')">DIRECTORIO COMPLETO</button>
                         </div>
 
-                        <div style="display: flex; gap: 15px;">
-                            <select name="sexo" style="flex: 1;">
-                                <option value="MASCULINO">MASCULINO</option>
-                                <option value="FEMENINO">FEMENINO</option>
-                            </select>
-                            <input type="date" name="fecha_nacimiento" style="flex: 1;" required>
+                        <!-- TAB 1: FORMULARIO -->
+                        <div id="tab-form" class="tab-content active">
+                            <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos completos, fotografía remota e información de contacto del Admin.</p>
+                            
+                            <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
+                                <!-- DATOS BÁSICOS QUE VIAJAN AL LOCAL -->
+                                <div style="display: flex; gap: 15px;">
+                                    <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" style="flex: 1;" required>
+                                    <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" style="flex: 2;" required>
+                                </div>
+
+                                <div style="display: flex; gap: 15px;">
+                                    <select name="sexo" style="flex: 1;">
+                                        <option value="MASCULINO">MASCULINO</option>
+                                        <option value="FEMENINO">FEMENINO</option>
+                                    </select>
+                                    <input type="date" name="fecha_nacimiento" style="flex: 1;" required>
+                                </div>
+                                
+                                <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
+
+                                <!-- DATOS ADICIONALES (SOLO ADMIN WEB) -->
+                                <span style="font-size: 11px; font-weight: bold; color: #cc0000;">DATOS COMPLEMENTARIOS (Uso interno Admin)</span>
+                                <div style="display: flex; gap: 15px;">
+                                    <input type="email" name="correo" placeholder="CORREO ELECTRÓNICO (Opcional)" style="flex: 1;">
+                                    <input type="tel" name="numero_celular" placeholder="NÚMERO CELULAR (Opcional)" style="flex: 1;">
+                                </div>
+                                
+                                <select name="afinidad_seguridad">
+                                    <option value="" disabled selected>NIVEL DE AFINIDAD CON ARMAS/SEGURIDAD</option>
+                                    <option value="NINGUNO">NINGUNO (Civil sin experiencia)</option>
+                                    <option value="BASICO">BÁSICO (Aficionado / Deportivo)</option>
+                                    <option value="INTERMEDIO">INTERMEDIO (Seguridad Privada)</option>
+                                    <option value="AVANZADO">AVANZADO (Fuerzas Armadas / Policiales)</option>
+                                </select>
+
+                                <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
+
+                                <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34 o dejar TODOS)" required>
+                                
+                                <!-- SECCIÓN CÁMARA WEB HTML5 -->
+                                <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #dddddd; border-radius:4px; background:#fafafa;">
+                                    <span style="font-size:12px; font-weight:bold;">FOTOGRAFÍA FACIAL (Opcional)</span>
+                                    <video id="webcam" width="280" height="210" autoplay playsinline style="border: 2px solid #cccccc; border-radius: 4px; background:#000000;"></video>
+                                    <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+                                    <button type="button" id="btn_snap" class="btn-black-small" style="width:280px; padding:12px; font-size:12px;">📸 CAPTURAR FOTO</button>
+                                    <input type="hidden" name="foto_b64" id="foto_b64">
+                                    <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente si se omite)</span>
+                                </div>
+
+                                <button type="submit" class="btn-rojo" style="background:#000000; padding: 16px;">GUARDAR E INYECTAR A EQUIPO ALPHA</button>
+                            </form>
                         </div>
-                        
-                        <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
 
-                        <!-- DATOS ADICIONALES (SOLO ADMIN WEB) -->
-                        <span style="font-size: 11px; font-weight: bold; color: #cc0000;">DATOS COMPLEMENTARIOS (Uso interno Admin)</span>
-                        <div style="display: flex; gap: 15px;">
-                            <input type="email" name="correo" placeholder="CORREO ELECTRÓNICO (Opcional)" style="flex: 1;">
-                            <input type="tel" name="numero_celular" placeholder="NÚMERO CELULAR (Opcional)" style="flex: 1;">
+                        <!-- TAB 2: DIRECTORIO COMPLETO -->
+                        <div id="tab-list" class="tab-content">
+                            <div style="overflow-y: auto; overflow-x: auto; max-height: 600px; border: 1px solid #eeeeee; border-radius: 4px;">
+                                <table class="admin-table" style="min-width: 800px; text-align: center;">
+                                    <tr>
+                                        <th>CREADO EL</th>
+                                        <th>CÉDULA</th>
+                                        <th>TIRADOR</th>
+                                        <th>SEXO / NAC.</th>
+                                        <th>CONTACTO</th>
+                                        <th>AFINIDAD</th>
+                                        <th>FOTO</th>
+                                        <th>DESTINO</th>
+                                        <th>ACCIÓN</th>
+                                    </tr>
+                                    {% for t in lista_tiradores %}
+                                    <tr>
+                                        <td style="font-size: 10px; color:#555555;">{{ t.fecha_creacion.strftime('%Y-%m-%d %H:%M') if t.fecha_creacion else '' }}</td>
+                                        <td style="font-weight:bold;">{{ t.cedula }}</td>
+                                        <td style="text-align: left;">{{ t.nombre }}</td>
+                                        <td>{{ t.sexo }}<br><span style="color:#777777">{{ t.fecha_nacimiento }}</span></td>
+                                        <td>{{ t.correo }}<br><span style="color:#777777">{{ t.numero_celular }}</span></td>
+                                        <td style="font-weight:bold;">{{ t.afinidad_seguridad }}</td>
+                                        <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
+                                            {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
+                                        </td>
+                                        <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
+                                        <td>
+                                            <form method="POST" action="/borrar_tirador" style="margin:0;">
+                                                <input type="hidden" name="cedula" value="{{ t.cedula }}">
+                                                <button type="submit" class="btn-black-small">BORRAR</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </table>
+                            </div>
                         </div>
-                        
-                        <select name="afinidad_seguridad">
-                            <option value="" disabled selected>NIVEL DE AFINIDAD CON ARMAS/SEGURIDAD</option>
-                            <option value="NINGUNO">NINGUNO (Civil sin experiencia)</option>
-                            <option value="BASICO">BÁSICO (Aficionado / Deportivo)</option>
-                            <option value="INTERMEDIO">INTERMEDIO (Seguridad Privada)</option>
-                            <option value="AVANZADO">AVANZADO (Fuerzas Armadas / Policiales)</option>
-                        </select>
 
-                        <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
-
-                        <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34 o dejar TODOS)" required>
-                        
-                        <!-- SECCIÓN CÁMARA WEB HTML5 -->
-                        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #dddddd; border-radius:4px; background:#fafafa;">
-                            <span style="font-size:12px; font-weight:bold;">FOTOGRAFÍA FACIAL (Opcional)</span>
-                            <video id="webcam" width="280" height="210" autoplay playsinline style="border: 2px solid #cccccc; border-radius: 4px; background:#000000;"></video>
-                            <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
-                            <button type="button" id="btn_snap" class="btn-black-small" style="width:280px; padding:12px; font-size:12px;">📸 CAPTURAR FOTO</button>
-                            <input type="hidden" name="foto_b64" id="foto_b64">
-                            <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente si se omite)</span>
-                        </div>
-
-                        <button type="submit" class="btn-rojo" style="background:#000000; padding: 16px;">GUARDAR E INYECTAR A EQUIPO ALPHA</button>
-                    </form>
-                    
-                    <div style="overflow-y: auto; overflow-x: auto; max-height: 250px; border: 1px solid #eeeeee; border-radius: 4px;">
-                        <table class="admin-table" style="min-width: 700px;">
-                            <tr>
-                                <th>CÉDULA</th>
-                                <th>TIRADOR</th>
-                                <th>CONTACTO</th>
-                                <th>AFINIDAD</th>
-                                <th>FOTO</th>
-                                <th>DESTINO</th>
-                                <th>ACCIÓN</th>
-                            </tr>
-                            {% for t in lista_tiradores %}
-                            <tr>
-                                <td style="font-weight:bold;">{{ t.cedula }}</td>
-                                <td>{{ t.nombre }}<br><span style="color:#777777">{{ t.sexo }} | {{ t.fecha_nacimiento }}</span></td>
-                                <td>{{ t.correo }}<br><span style="color:#777777">{{ t.numero_celular }}</span></td>
-                                <td style="font-weight:bold;">{{ t.afinidad_seguridad }}</td>
-                                <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
-                                    {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
-                                </td>
-                                <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
-                                <td>
-                                    <form method="POST" action="/borrar_tirador" style="margin:0;">
-                                        <input type="hidden" name="cedula" value="{{ t.cedula }}">
-                                        <button type="submit" class="btn-black-small">BORRAR</button>
-                                    </form>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </table>
-                    </div>
+                    </div> <!-- Fin tabs-container -->
                 </div>
             </div>
             
@@ -645,6 +683,23 @@ def index():
 
         <!-- SCRIPTS JS -->
         <script>
+            // Lógica de Tabs
+            function openTab(evt, tabName) {
+                var i, tabcontent, tablinks;
+                tabcontent = document.getElementsByClassName("tab-content");
+                for (i = 0; i < tabcontent.length; i++) {
+                    tabcontent[i].style.display = "none";
+                    tabcontent[i].classList.remove("active");
+                }
+                tablinks = document.getElementsByClassName("tab-btn");
+                for (i = 0; i < tablinks.length; i++) {
+                    tablinks[i].classList.remove("active");
+                }
+                document.getElementById(tabName).style.display = "block";
+                document.getElementById(tabName).classList.add("active");
+                evt.currentTarget.classList.add("active");
+            }
+
             // Lógica de Filtros de Tabla
             function filterTable() {
                 const table = document.getElementById('dataTable');
