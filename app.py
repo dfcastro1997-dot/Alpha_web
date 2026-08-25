@@ -53,7 +53,7 @@ def init_db():
     ''')
     cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'")
 
-    # NUEVA TABLA: PRE-REGISTRO DE TIRADORES (Datos Biográficos Completos + FOTO)
+    # TABLA: PRE-REGISTRO DE TIRADORES (Datos Biográficos Completos + FOTO + DATOS ADICIONALES ADMIN)
     cur.execute('''
         CREATE TABLE IF NOT EXISTS tiradores_web (
             cedula VARCHAR(50) PRIMARY KEY,
@@ -68,6 +68,11 @@ def init_db():
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS sexo VARCHAR(20) DEFAULT 'MASCULINO'")
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD'")
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS foto_b64 TEXT")
+    
+    # NUEVAS COLUMNAS (Solo Admin)
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS correo VARCHAR(100) DEFAULT ''")
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS numero_celular VARCHAR(30) DEFAULT ''")
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS afinidad_seguridad VARCHAR(100) DEFAULT ''")
     
     conn.commit()
     cur.close()
@@ -138,15 +143,14 @@ def recepcion_datos():
     return jsonify({"error": "DATOS INVÁLIDOS"}), 400
 
 # --- 2. ENDPOINT API (Alpha descarga pre-registros pendientes) ---
+# IMPORTANTE: NO SE INCLUYEN celular, correo, ni afinidad aquí para no enviarlos al local
 @app.route('/api/sincronizar_tiradores', methods=['GET'])
 @requires_api_auth
 def sincronizar_tiradores():
-    # El ID de la máquina ahora llega por la URL de forma segura
     id_maquina = request.args.get('id_alpha', 'TODOS')
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    # Retornamos los datos, incluyendo la foto codificada
     cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, foto_b64 FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS' ORDER BY fecha_creacion ASC", (id_maquina,))
     tiradores = cur.fetchall()
     cur.close()
@@ -201,7 +205,8 @@ def login():
     </head>
     <body>
         <div class="login-box">
-            <img src="https://i.ibb.co/r2mMkRTq/Logo.png" alt="Alpha Security" class="logo">
+            <!-- LOGO CORREGIDO PARA EVITAR BLOQUEO DE RED -->
+            <img src="{{ url_for('static', filename='Logo.png') }}" onerror="this.onerror=null; this.src='https://dummyimage.com/220x60/cc0000/ffffff&text=ALPHA+SECURITY';" alt="Alpha Security" class="logo">
             <p>PORTAL CLOUD SYSTEM</p>
             <form method="POST">
                 <input type="text" name="username" placeholder="USUARIO" required>
@@ -271,19 +276,27 @@ def registrar_tirador():
         id_asignado = request.form.get('id_asignado', 'TODOS').strip().upper()
         foto_b64 = request.form.get('foto_b64', '')
         
+        # Nuevos campos
+        correo = request.form.get('correo', '').strip()
+        numero_celular = request.form.get('numero_celular', '').strip()
+        afinidad_seguridad = request.form.get('afinidad_seguridad', '').strip().upper()
+        
         if cedula and nombre:
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, foto_b64) 
-                VALUES (%s, %s, %s, %s, %s, %s) 
+                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, foto_b64, correo, numero_celular, afinidad_seguridad) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) 
                 ON CONFLICT (cedula) DO UPDATE SET 
                     nombre = EXCLUDED.nombre,
                     sexo = EXCLUDED.sexo,
                     fecha_nacimiento = EXCLUDED.fecha_nacimiento,
                     id_alpha_asignado = EXCLUDED.id_alpha_asignado,
-                    foto_b64 = EXCLUDED.foto_b64
-            ''', (cedula, nombre, sexo, fecha_nac, id_asignado, foto_b64))
+                    foto_b64 = EXCLUDED.foto_b64,
+                    correo = EXCLUDED.correo,
+                    numero_celular = EXCLUDED.numero_celular,
+                    afinidad_seguridad = EXCLUDED.afinidad_seguridad
+            ''', (cedula, nombre, sexo, fecha_nac, id_asignado, foto_b64, correo, numero_celular, afinidad_seguridad))
             conn.commit()
             cur.close()
             conn.close()
@@ -335,8 +348,8 @@ def index():
     if usuario_logeado == 'ADMIN':
         cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
         lista_usuarios = cur.fetchall()
-        # Traemos también si tiene foto para mostrar indicador
-        cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, (foto_b64 IS NOT NULL AND foto_b64 != '') as tiene_foto FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 15")
+        # SELECCIÓN ACTUALIZADA INCLUYENDO LOS NUEVOS CAMPOS
+        cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, correo, numero_celular, afinidad_seguridad, (foto_b64 IS NOT NULL AND foto_b64 != '') as tiene_foto FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 20")
         lista_tiradores = cur.fetchall()
 
     cur.close()
@@ -372,14 +385,14 @@ def index():
             .user-info b { color: #000000; font-size: 15px; text-transform: uppercase; }
             .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
             .btn-rojo:hover { background: #000000; }
-            .container { padding: 40px; max-width: 1500px; margin: 0 auto; }
+            .container { padding: 40px; max-width: 1600px; margin: 0 auto; }
             .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
             .kpi-card { background: #ffffff; padding: 25px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-left: 5px solid #000000; display: flex; flex-direction: column; justify-content: center; }
             .kpi-card:nth-child(1) { border-left-color: #cc0000; }
             .kpi-card:nth-child(3) { border-left-color: #cc0000; }
             .kpi-title { font-size: 12px; color: #555555; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
             .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
-            .admin-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; margin-bottom: 30px; }
+            .admin-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 30px; margin-bottom: 30px; }
             .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; margin-bottom: 30px;}
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
             .form-user { display: flex; flex-direction: column; gap: 15px; }
@@ -387,7 +400,7 @@ def index():
             .form-user input[type="date"] { font-family: 'Segoe UI', Arial, sans-serif; cursor: pointer; text-transform: uppercase;}
             .form-user input:focus, .form-user select:focus { border: 1px solid #cc0000; outline: none; }
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
-            table { width: 100%; border-collapse: collapse; }
+            table { width: 100%; border-collapse: collapse; min-width: 800px; }
             th, td { padding: 16px; text-align: center; font-size: 12px; }
             th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-weight: bold; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #000000; }
             td { border-bottom: 1px solid #eeeeee; color: #000000; font-weight: 500; }
@@ -410,7 +423,8 @@ def index():
     </head>
     <body>
         <div class="navbar">
-            <img src="https://i.ibb.co/r2mMkRTq/Logo.png" alt="Alpha Security">
+            <!-- LOGO CORREGIDO PARA EVITAR BLOQUEO DE RED -->
+            <img src="{{ url_for('static', filename='Logo.png') }}" onerror="this.onerror=null; this.src='https://dummyimage.com/220x60/cc0000/ffffff&text=ALPHA+SECURITY';" alt="Alpha Security">
             <div class="user-info">
                 <span>CONECTADO COMO: <b>{{ current_user }}</b></span>
                 <a href="/logout" class="btn-rojo">CERRAR SESIÓN</a>
@@ -449,7 +463,7 @@ def index():
                         <input type="text" name="new_id_alpha" placeholder="ID EQUIPO (Dejar vacío para ver todos)">
                         <button type="submit" class="btn-rojo" style="padding: 14px;">GUARDAR PERFIL</button>
                     </form>
-                    <div style="overflow-y: auto; max-height: 150px; border: 1px solid #eeeeee; border-radius: 4px;">
+                    <div style="overflow-y: auto; max-height: 250px; border: 1px solid #eeeeee; border-radius: 4px;">
                         <table class="admin-table">
                             <tr>
                                 <th>USUARIO</th>
@@ -474,22 +488,46 @@ def index():
                     </div>
                 </div>
 
-                <!-- Panel 2: Pre-Registro de Tiradores -->
+                <!-- Panel 2: Pre-Registro de Tiradores ACTUALIZADO CON CAMPOS NUEVOS -->
                 <div class="panel" style="border-top: 4px solid #000000;">
                     <h3>PRE-REGISTRO DE TIRADORES (NUBE A LOCAL)</h3>
-                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos completos y fotografía remota.</p>
+                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos completos, fotografía remota e información de contacto del Admin.</p>
+                    
                     <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
-                        <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" required>
-                        <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" required>
+                        <!-- DATOS BÁSICOS QUE VIAJAN AL LOCAL -->
+                        <div style="display: flex; gap: 15px;">
+                            <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" style="flex: 1;" required>
+                            <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" style="flex: 2;" required>
+                        </div>
+
                         <div style="display: flex; gap: 15px;">
                             <select name="sexo" style="flex: 1;">
                                 <option value="MASCULINO">MASCULINO</option>
                                 <option value="FEMENINO">FEMENINO</option>
                             </select>
-                            <!-- Input Tipo Calendario Corregido -->
                             <input type="date" name="fecha_nacimiento" style="flex: 1;" required>
                         </div>
-                        <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34)" required>
+                        
+                        <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
+
+                        <!-- DATOS ADICIONALES (SOLO ADMIN WEB) -->
+                        <span style="font-size: 11px; font-weight: bold; color: #cc0000;">DATOS COMPLEMENTARIOS (Uso interno Admin)</span>
+                        <div style="display: flex; gap: 15px;">
+                            <input type="email" name="correo" placeholder="CORREO ELECTRÓNICO (Opcional)" style="flex: 1;">
+                            <input type="tel" name="numero_celular" placeholder="NÚMERO CELULAR (Opcional)" style="flex: 1;">
+                        </div>
+                        
+                        <select name="afinidad_seguridad">
+                            <option value="" disabled selected>NIVEL DE AFINIDAD CON ARMAS/SEGURIDAD</option>
+                            <option value="NINGUNO">NINGUNO (Civil sin experiencia)</option>
+                            <option value="BASICO">BÁSICO (Aficionado / Deportivo)</option>
+                            <option value="INTERMEDIO">INTERMEDIO (Seguridad Privada)</option>
+                            <option value="AVANZADO">AVANZADO (Fuerzas Armadas / Policiales)</option>
+                        </select>
+
+                        <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
+
+                        <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34 o dejar TODOS)" required>
                         
                         <!-- SECCIÓN CÁMARA WEB HTML5 -->
                         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #dddddd; border-radius:4px; background:#fafafa;">
@@ -498,17 +536,19 @@ def index():
                             <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
                             <button type="button" id="btn_snap" class="btn-black-small" style="width:280px; padding:12px; font-size:12px;">📸 CAPTURAR FOTO</button>
                             <input type="hidden" name="foto_b64" id="foto_b64">
-                            <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente)</span>
+                            <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente si se omite)</span>
                         </div>
 
-                        <button type="submit" class="btn-rojo" style="background:#000000; padding: 16px;">ENVIAR A EQUIPO ALPHA</button>
+                        <button type="submit" class="btn-rojo" style="background:#000000; padding: 16px;">GUARDAR E INYECTAR A EQUIPO ALPHA</button>
                     </form>
-                    <div style="overflow-y: auto; max-height: 150px; border: 1px solid #eeeeee; border-radius: 4px;">
-                        <table class="admin-table">
+                    
+                    <div style="overflow-y: auto; overflow-x: auto; max-height: 250px; border: 1px solid #eeeeee; border-radius: 4px;">
+                        <table class="admin-table" style="min-width: 700px;">
                             <tr>
                                 <th>CÉDULA</th>
                                 <th>TIRADOR</th>
-                                <th>SEXO / NAC.</th>
+                                <th>CONTACTO</th>
+                                <th>AFINIDAD</th>
                                 <th>FOTO</th>
                                 <th>DESTINO</th>
                                 <th>ACCIÓN</th>
@@ -516,8 +556,9 @@ def index():
                             {% for t in lista_tiradores %}
                             <tr>
                                 <td style="font-weight:bold;">{{ t.cedula }}</td>
-                                <td>{{ t.nombre }}</td>
-                                <td>{{ t.sexo }}<br><span style="color:#777777">{{ t.fecha_nacimiento }}</span></td>
+                                <td>{{ t.nombre }}<br><span style="color:#777777">{{ t.sexo }} | {{ t.fecha_nacimiento }}</span></td>
+                                <td>{{ t.correo }}<br><span style="color:#777777">{{ t.numero_celular }}</span></td>
+                                <td style="font-weight:bold;">{{ t.afinidad_seguridad }}</td>
                                 <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
                                     {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
                                 </td>
@@ -583,7 +624,6 @@ def index():
                         </tr>
                             {% for r in regs %}
                             <tr class="data-row">
-                                <!-- NUEVO FORMATO DE ID + USUARIO -->
                                 <td style="line-height:1.2;"><b>{{ r.id_alpha }}</b><br><span style="font-size:10px; color:#777777;">{{ r.usuario_api }}</span></td>
                                 <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 11px; font-weight:bold;">{{ r.fecha_hora.strftime('%H:%M:%S') if r.fecha_hora else '' }}</td>
                                 <td style="color: #555555; font-weight: bold;">{{ r.numero_cedula }}</td>
