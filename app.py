@@ -53,19 +53,21 @@ def init_db():
     ''')
     cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'")
 
-    # NUEVA TABLA: PRE-REGISTRO DE TIRADORES (Datos Biográficos Completos)
+    # NUEVA TABLA: PRE-REGISTRO DE TIRADORES (Datos Biográficos Completos + FOTO)
     cur.execute('''
         CREATE TABLE IF NOT EXISTS tiradores_web (
             cedula VARCHAR(50) PRIMARY KEY,
             nombre VARCHAR(150) NOT NULL,
             sexo VARCHAR(20) DEFAULT 'MASCULINO',
             fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD',
+            foto_b64 TEXT,
             id_alpha_asignado VARCHAR(50) NOT NULL,
             fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS sexo VARCHAR(20) DEFAULT 'MASCULINO'")
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD'")
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS foto_b64 TEXT") # <-- Nueva columna para foto
     
     conn.commit()
     cur.close()
@@ -139,13 +141,12 @@ def recepcion_datos():
 @app.route('/api/sincronizar_tiradores', methods=['GET'])
 @requires_api_auth
 def sincronizar_tiradores():
-    # El ID de la máquina ahora llega por la URL de forma segura
     id_maquina = request.args.get('id_alpha', 'TODOS')
-    
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    # Filtramos exactamente por el equipo que lo solicita
-    cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS'", (id_maquina,))
+    
+    # Retornamos los datos, incluyendo la foto codificada
+    cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, foto_b64 FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS' ORDER BY fecha_creacion ASC", (id_maquina,))
     tiradores = cur.fetchall()
     cur.close()
     conn.close()
@@ -265,21 +266,23 @@ def registrar_tirador():
         cedula = request.form.get('cedula').strip()
         nombre = request.form.get('nombre').strip().upper()
         sexo = request.form.get('sexo', 'MASCULINO').strip().upper()
-        fecha_nac = request.form.get('fecha_nacimiento', 'AAAA/MM/DD').strip()
+        fecha_nac = request.form.get('fecha_nacimiento', 'AAAA-MM-DD').strip()
         id_asignado = request.form.get('id_asignado', 'TODOS').strip().upper()
+        foto_b64 = request.form.get('foto_b64', '')
         
         if cedula and nombre:
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado) 
-                VALUES (%s, %s, %s, %s, %s) 
+                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, foto_b64) 
+                VALUES (%s, %s, %s, %s, %s, %s) 
                 ON CONFLICT (cedula) DO UPDATE SET 
                     nombre = EXCLUDED.nombre,
                     sexo = EXCLUDED.sexo,
                     fecha_nacimiento = EXCLUDED.fecha_nacimiento,
-                    id_alpha_asignado = EXCLUDED.id_alpha_asignado
-            ''', (cedula, nombre, sexo, fecha_nac, id_asignado))
+                    id_alpha_asignado = EXCLUDED.id_alpha_asignado,
+                    foto_b64 = EXCLUDED.foto_b64
+            ''', (cedula, nombre, sexo, fecha_nac, id_asignado, foto_b64))
             conn.commit()
             cur.close()
             conn.close()
@@ -331,7 +334,8 @@ def index():
     if usuario_logeado == 'ADMIN':
         cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
         lista_usuarios = cur.fetchall()
-        cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 15")
+        # Traemos también si tiene foto para mostrar indicador
+        cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, (foto_b64 IS NOT NULL AND foto_b64 != '') as tiene_foto FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 15")
         lista_tiradores = cur.fetchall()
 
     cur.close()
@@ -379,6 +383,7 @@ def index():
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
             .form-user { display: flex; flex-direction: column; gap: 15px; }
             .form-user input, .form-user select { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
+            .form-user input[type="date"] { font-family: 'Segoe UI', Arial, sans-serif; cursor: pointer;}
             .form-user input:focus, .form-user select:focus { border: 1px solid #cc0000; outline: none; }
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; }
@@ -471,7 +476,7 @@ def index():
                 <!-- Panel 2: Pre-Registro de Tiradores -->
                 <div class="panel" style="border-top: 4px solid #000000;">
                     <h3>PRE-REGISTRO DE TIRADORES (NUBE A LOCAL)</h3>
-                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos para que la máquina Alpha complete foto/huella.</p>
+                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos completos y fotografía remota.</p>
                     <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
                         <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" required>
                         <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" required>
@@ -480,17 +485,30 @@ def index():
                                 <option value="MASCULINO">MASCULINO</option>
                                 <option value="FEMENINO">FEMENINO</option>
                             </select>
-                            <input type="text" name="fecha_nacimiento" placeholder="FECHA NAC. (AAAA/MM/DD)" style="flex: 1;" required>
+                            <!-- Input Tipo Calendario Corregido -->
+                            <input type="date" name="fecha_nacimiento" style="flex: 1;" required>
                         </div>
                         <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34)" required>
-                        <button type="submit" class="btn-rojo" style="background:#000;">ENVIAR A EQUIPO ALPHA</button>
+                        
+                        <!-- SECCIÓN CÁMARA WEB HTML5 -->
+                        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #ddd; border-radius:4px; background:#fafafa;">
+                            <span style="font-size:12px; font-weight:bold;">FOTOGRAFÍA FACIAL (Opcional)</span>
+                            <video id="webcam" width="280" height="210" autoplay playsinline style="border: 2px solid #ccc; border-radius: 4px; background:#000;"></video>
+                            <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+                            <button type="button" id="btn_snap" class="btn-black-small" style="width:280px; padding:12px; font-size:12px;">📸 CAPTURAR FOTO</button>
+                            <input type="hidden" name="foto_b64" id="foto_b64">
+                            <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente)</span>
+                        </div>
+
+                        <button type="submit" class="btn-rojo" style="background:#000; padding: 16px;">ENVIAR A EQUIPO ALPHA</button>
                     </form>
                     <div style="overflow-y: auto; max-height: 150px; border: 1px solid #eeeeee; border-radius: 4px;">
                         <table class="admin-table">
                             <tr>
                                 <th>CÉDULA</th>
-                                <th>TIRADOR (PENDIENTE DE HUELLA)</th>
+                                <th>TIRADOR</th>
                                 <th>SEXO / NAC.</th>
+                                <th>FOTO</th>
                                 <th>DESTINO</th>
                                 <th>ACCIÓN</th>
                             </tr>
@@ -499,6 +517,9 @@ def index():
                                 <td style="font-weight:bold;">{{ t.cedula }}</td>
                                 <td>{{ t.nombre }}</td>
                                 <td>{{ t.sexo }}<br><span style="color:#777">{{ t.fecha_nacimiento }}</span></td>
+                                <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
+                                    {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
+                                </td>
                                 <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
                                 <td>
                                     <form method="POST" action="/borrar_tirador" style="margin:0;">
@@ -583,6 +604,7 @@ def index():
 
         <!-- SCRIPTS JS -->
         <script>
+            // Lógica de Filtros de Tabla
             function filterTable() {
                 const table = document.getElementById('dataTable');
                 const tr = table.querySelectorAll('tbody tr.data-row');
@@ -590,12 +612,10 @@ def index():
 
                 tr.forEach(row => {
                     let showRow = true;
-                    
                     inputs.forEach((input) => {
                         const colIdx = input.getAttribute('data-col');
                         const filterValue = input.value.toLowerCase();
                         const cell = row.cells[colIdx];
-                        
                         if (cell) {
                             const cellText = cell.textContent || cell.innerText;
                             if (cellText.toLowerCase().indexOf(filterValue) === -1) {
@@ -603,10 +623,53 @@ def index():
                             }
                         }
                     });
-                    
                     row.style.display = showRow ? '' : 'none';
                 });
             }
+
+            // Lógica de Cámara Web HTML5
+            {% if current_user == 'ADMIN' %}
+            const video = document.getElementById('webcam');
+            const canvas = document.getElementById('canvas');
+            const btnSnap = document.getElementById('btn_snap');
+            const fotoInput = document.getElementById('foto_b64');
+            const fotoStatus = document.getElementById('foto_status');
+
+            if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } }).then(function(stream) {
+                    video.srcObject = stream;
+                    video.play();
+                }).catch(function(err) {
+                    console.log("No se pudo acceder a la cámara: " + err);
+                    fotoStatus.textContent = "CÁMARA NO DISPONIBLE";
+                });
+            }
+
+            btnSnap.addEventListener('click', function() {
+                if(video.srcObject) {
+                    const context = canvas.getContext('2d');
+                    // Espejamos la imagen por UX
+                    context.translate(canvas.width, 0);
+                    context.scale(-1, 1);
+                    context.drawImage(video, 0, 0, 640, 480);
+                    
+                    // Extraer Base64
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85); // JPEG comprimido para transferencias ágiles
+                    fotoInput.value = dataUrl;
+                    
+                    fotoStatus.textContent = "✓ FOTO CAPTURADA SATISFACTORIAMENTE";
+                    fotoStatus.style.color = "#27ae60";
+                    
+                    // Pequeño efecto visual
+                    btnSnap.style.backgroundColor = "#27ae60";
+                    btnSnap.textContent = "FOTO TOMADA";
+                    setTimeout(() => {
+                        btnSnap.style.backgroundColor = "#000";
+                        btnSnap.textContent = "📸 REPETIR FOTO";
+                    }, 1500);
+                }
+            });
+            {% endif %}
         </script>
 
         {% if current_user == 'ADMIN' %}
