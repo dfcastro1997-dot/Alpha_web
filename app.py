@@ -48,6 +48,10 @@ def init_db():
             tiros_fallidos INT
         )
     ''')
+    # NUEVO: Añadir columna para vincular el registro al usuario que lo subió
+    cur.execute('''
+        ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'
+    ''')
     conn.commit()
     cur.close()
     conn.close()
@@ -94,13 +98,14 @@ def recepcion_datos():
     data = request.json
     if data:
         fecha_hora = data.get('fecha_hora', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        usuario_actual = request.authorization.username # Detectamos quién lo está subiendo
         
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute('''
             INSERT INTO registros 
-            (id_alpha, fecha_hora, numero_cedula, nombre, nombre_ejercicio, tipo_arma, tiros_acertados, tiros_fallidos)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (id_alpha, fecha_hora, numero_cedula, nombre, nombre_ejercicio, tipo_arma, tiros_acertados, tiros_fallidos, usuario_api)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (
             data.get('id_alpha', 'DESCONOCIDO'),
             fecha_hora,
@@ -109,7 +114,8 @@ def recepcion_datos():
             data.get('nombre_ejercicio', 'N/A'),
             data.get('tipo_arma', 'N/A'),
             data.get('tiros_acertados', 0),
-            data.get('tiros_fallidos', 0)
+            data.get('tiros_fallidos', 0),
+            usuario_actual # Lo guardamos en la nueva columna
         ))
         conn.commit()
         cur.close()
@@ -209,10 +215,18 @@ def crear_usuario():
 @app.route('/', methods=['GET'])
 @login_required
 def index():
-    # Obtener todos los registros desde PostgreSQL
+    usuario_logeado = session.get('user')
+
+    # Obtener los registros filtrados desde PostgreSQL
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM registros ORDER BY id DESC")
+    
+    if usuario_logeado == 'ADMIN':
+        cur.execute("SELECT * FROM registros ORDER BY id DESC")
+    else:
+        # Filtramos estrictamente por el usuario conectado
+        cur.execute("SELECT * FROM registros WHERE usuario_api = %s ORDER BY id DESC", (usuario_logeado,))
+        
     registros_globales = cur.fetchall()
     cur.close()
     conn.close()

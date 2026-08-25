@@ -1,0 +1,3 @@
+pyinstaller --noconfirm --onefile --windowed --icon="03_Imagenes\Icono.ico" --name="ALPHA_SECURITY" main.py
+
+pyinstaller --noconfirm --onefile --windowed --icon="03_Imagenes\Icono_2.ico" --name="motor_escenario" motor_escenario.py
