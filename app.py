@@ -67,7 +67,7 @@ def init_db():
     ''')
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS sexo VARCHAR(20) DEFAULT 'MASCULINO'")
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD'")
-    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS foto_b64 TEXT") # <-- Nueva columna para foto
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS foto_b64 TEXT")
     
     conn.commit()
     cur.close()
@@ -141,10 +141,11 @@ def recepcion_datos():
 @app.route('/api/sincronizar_tiradores', methods=['GET'])
 @requires_api_auth
 def sincronizar_tiradores():
+    # El ID de la máquina ahora llega por la URL de forma segura
     id_maquina = request.args.get('id_alpha', 'TODOS')
+    
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    
     # Retornamos los datos, incluyendo la foto codificada
     cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, foto_b64 FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS' ORDER BY fecha_creacion ASC", (id_maquina,))
     tiradores = cur.fetchall()
@@ -383,7 +384,7 @@ def index():
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
             .form-user { display: flex; flex-direction: column; gap: 15px; }
             .form-user input, .form-user select { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
-            .form-user input[type="date"] { font-family: 'Segoe UI', Arial, sans-serif; cursor: pointer;}
+            .form-user input[type="date"] { font-family: 'Segoe UI', Arial, sans-serif; cursor: pointer; text-transform: uppercase;}
             .form-user input:focus, .form-user select:focus { border: 1px solid #cc0000; outline: none; }
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; }
@@ -491,16 +492,16 @@ def index():
                         <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34)" required>
                         
                         <!-- SECCIÓN CÁMARA WEB HTML5 -->
-                        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #ddd; border-radius:4px; background:#fafafa;">
+                        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #dddddd; border-radius:4px; background:#fafafa;">
                             <span style="font-size:12px; font-weight:bold;">FOTOGRAFÍA FACIAL (Opcional)</span>
-                            <video id="webcam" width="280" height="210" autoplay playsinline style="border: 2px solid #ccc; border-radius: 4px; background:#000;"></video>
+                            <video id="webcam" width="280" height="210" autoplay playsinline style="border: 2px solid #cccccc; border-radius: 4px; background:#000000;"></video>
                             <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
                             <button type="button" id="btn_snap" class="btn-black-small" style="width:280px; padding:12px; font-size:12px;">📸 CAPTURAR FOTO</button>
                             <input type="hidden" name="foto_b64" id="foto_b64">
                             <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente)</span>
                         </div>
 
-                        <button type="submit" class="btn-rojo" style="background:#000; padding: 16px;">ENVIAR A EQUIPO ALPHA</button>
+                        <button type="submit" class="btn-rojo" style="background:#000000; padding: 16px;">ENVIAR A EQUIPO ALPHA</button>
                     </form>
                     <div style="overflow-y: auto; max-height: 150px; border: 1px solid #eeeeee; border-radius: 4px;">
                         <table class="admin-table">
@@ -516,7 +517,7 @@ def index():
                             <tr>
                                 <td style="font-weight:bold;">{{ t.cedula }}</td>
                                 <td>{{ t.nombre }}</td>
-                                <td>{{ t.sexo }}<br><span style="color:#777">{{ t.fecha_nacimiento }}</span></td>
+                                <td>{{ t.sexo }}<br><span style="color:#777777">{{ t.fecha_nacimiento }}</span></td>
                                 <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
                                     {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
                                 </td>
@@ -583,7 +584,7 @@ def index():
                             {% for r in regs %}
                             <tr class="data-row">
                                 <!-- NUEVO FORMATO DE ID + USUARIO -->
-                                <td style="line-height:1.2;"><b>{{ r.id_alpha }}</b><br><span style="font-size:10px; color:#777;">{{ r.usuario_api }}</span></td>
+                                <td style="line-height:1.2;"><b>{{ r.id_alpha }}</b><br><span style="font-size:10px; color:#777777;">{{ r.usuario_api }}</span></td>
                                 <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 11px; font-weight:bold;">{{ r.fecha_hora.strftime('%H:%M:%S') if r.fecha_hora else '' }}</td>
                                 <td style="color: #555555; font-weight: bold;">{{ r.numero_cedula }}</td>
                                 <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
@@ -664,7 +665,7 @@ def index():
                     btnSnap.style.backgroundColor = "#27ae60";
                     btnSnap.textContent = "FOTO TOMADA";
                     setTimeout(() => {
-                        btnSnap.style.backgroundColor = "#000";
+                        btnSnap.style.backgroundColor = "#000000";
                         btnSnap.textContent = "📸 REPETIR FOTO";
                     }, 1500);
                 }
@@ -695,7 +696,7 @@ def index():
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11, weight: 'bold'}, color: '#000' } }
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11, weight: 'bold'}, color: '#000000' } }
                     },
                     cutout: '70%'
                 }
@@ -715,11 +716,11 @@ def index():
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        y: { beginAtZero: true, grid: { color: '#eeeeee' }, ticks: { color: '#000', font: {weight: 'bold'} } },
-                        x: { grid: { display: false }, ticks: { color: '#000', font: {weight: 'bold'} } }
+                        y: { beginAtZero: true, grid: { color: '#eeeeee' }, ticks: { color: '#000000', font: {weight: 'bold'} } },
+                        x: { grid: { display: false }, ticks: { color: '#000000', font: {weight: 'bold'} } }
                     },
                     plugins: {
-                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11, weight: 'bold'}, color: '#000' } }
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: {family: 'Segoe UI', size: 11, weight: 'bold'}, color: '#000000' } }
                     }
                 }
             });
