@@ -20,7 +20,7 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
-    # Crear tabla de usuarios web con asignación de ID EQUIPO
+    # Tabla de usuarios web
     cur.execute('''
         CREATE TABLE IF NOT EXISTS usuarios (
             username VARCHAR(50) PRIMARY KEY,
@@ -28,17 +28,15 @@ def init_db():
             id_alpha VARCHAR(50) DEFAULT 'TODOS'
         )
     ''')
-    # Actualización automática si la tabla ya existía
     cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS id_alpha VARCHAR(50) DEFAULT 'TODOS'")
     
-    # Crear administrador por defecto si no existe
     cur.execute('''
         INSERT INTO usuarios (username, password, id_alpha) 
         VALUES ('ADMIN', '80406651DETAIMALPHA', 'TODOS') 
         ON CONFLICT (username) DO NOTHING
     ''')
     
-    # Crear tabla de registros balísticos
+    # Tabla de registros balísticos
     cur.execute('''
         CREATE TABLE IF NOT EXISTS registros (
             id SERIAL PRIMARY KEY,
@@ -54,12 +52,21 @@ def init_db():
         )
     ''')
     cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'")
+
+    # NUEVA TABLA: PRE-REGISTRO DE TIRADORES
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS tiradores_web (
+            cedula VARCHAR(50) PRIMARY KEY,
+            nombre VARCHAR(150) NOT NULL,
+            id_alpha_asignado VARCHAR(50) NOT NULL,
+            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
     conn.commit()
     cur.close()
     conn.close()
 
-# Ejecutar creación de tablas al arrancar
 init_db()
 
 # --- VALIDACIÓN DE USUARIOS EN BASE DE DATOS ---
@@ -75,7 +82,6 @@ def check_auth(username, password):
         return True
     return False
 
-# --- MIDDLEWARE PARA LA API (Software de Escritorio) ---
 def requires_api_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -85,7 +91,6 @@ def requires_api_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- MIDDLEWARE PARA LA WEB (Usuarios Humanos) ---
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -94,7 +99,7 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- 1. ENDPOINT API (Recibe los datos silenciosamente y los guarda en Aiven) ---
+# --- 1. ENDPOINT API (Recibe los datos de Alpha) ---
 @app.route('/api/recepcion', methods=['POST'])
 @requires_api_auth
 def recepcion_datos():
@@ -125,6 +130,27 @@ def recepcion_datos():
         conn.close()
         return jsonify({"status": "ok", "mensaje": "DATOS GUARDADOS EN POSTGRESQL EXITOSAMENTE"}), 200
     return jsonify({"error": "DATOS INVÁLIDOS"}), 400
+
+# --- ENDPOINT API (Alpha descarga pre-registros pendientes) ---
+@app.route('/api/sincronizar_tiradores', methods=['GET'])
+@requires_api_auth
+def sincronizar_tiradores():
+    usuario_actual = request.authorization.username
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    # Busca el ID EQUIPO asociado a la cuenta que se conecta
+    cur.execute("SELECT id_alpha FROM usuarios WHERE username = %s", (usuario_actual,))
+    user_info = cur.fetchone()
+    user_id_alpha = user_info['id_alpha'] if user_info else 'TODOS'
+
+    # Descarga los tiradores asignados a su ID
+    cur.execute("SELECT cedula, nombre FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS'", (user_id_alpha,))
+    tiradores = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    return jsonify({"status": "ok", "tiradores": tiradores}), 200
 
 # --- 2. PÁGINA DE LOGIN HTML ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -218,7 +244,6 @@ def crear_usuario():
             conn.close()
     return redirect(url_for('index'))
 
-# --- ELIMINAR USUARIO WEB (Solo ADMIN) ---
 @app.route('/borrar_usuario', methods=['POST'])
 @login_required
 def borrar_usuario():
@@ -233,7 +258,29 @@ def borrar_usuario():
             conn.close()
     return redirect(url_for('index'))
 
-# --- 4. DASHBOARD (Tabla Profesional + Gráficas + Filtros) ---
+# --- PRE-REGISTRO DE TIRADORES ---
+@app.route('/registrar_tirador', methods=['POST'])
+@login_required
+def registrar_tirador():
+    if session.get('user') == 'ADMIN':
+        cedula = request.form.get('cedula').strip()
+        nombre = request.form.get('nombre').strip().upper()
+        id_asignado = request.form.get('id_asignado', 'TODOS').strip().upper()
+        
+        if cedula and nombre:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('''
+                INSERT INTO tiradores_web (cedula, nombre, id_alpha_asignado) 
+                VALUES (%s, %s, %s) 
+                ON CONFLICT (cedula) DO UPDATE SET nombre = EXCLUDED.nombre, id_alpha_asignado = EXCLUDED.id_alpha_asignado
+            ''', (cedula, nombre, id_asignado))
+            conn.commit()
+            cur.close()
+            conn.close()
+    return redirect(url_for('index'))
+
+# --- 4. DASHBOARD ---
 @app.route('/', methods=['GET'])
 @login_required
 def index():
@@ -242,36 +289,43 @@ def index():
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    # Obtener qué ID EQUIPO puede ver este usuario
     cur.execute("SELECT id_alpha FROM usuarios WHERE username = %s", (usuario_logeado,))
     user_info = cur.fetchone()
     user_id_alpha = user_info['id_alpha'] if user_info else 'TODOS'
 
-    # Filtrar registros
     if usuario_logeado == 'ADMIN' or user_id_alpha == 'TODOS':
-        cur.execute("SELECT * FROM registros ORDER BY id DESC")
+        cur.execute("SELECT * FROM registros ORDER BY fecha_hora DESC")
     else:
-        cur.execute("SELECT * FROM registros WHERE id_alpha = %s ORDER BY id DESC", (user_id_alpha,))
+        cur.execute("SELECT * FROM registros WHERE id_alpha = %s ORDER BY fecha_hora DESC", (user_id_alpha,))
         
     registros_globales = cur.fetchall()
 
-    # Si es ADMIN, obtener la lista de perfiles para administrarlos
+    # --- AGRUPACIÓN POR DÍAS (NUEVO) ---
+    registros_por_dia = {}
+    for r in registros_globales:
+        # Extraemos solo la fecha (YYYY-MM-DD)
+        dia = r['fecha_hora'].strftime('%Y-%m-%d') if r['fecha_hora'] else 'FECHA DESCONOCIDA'
+        if dia not in registros_por_dia:
+            registros_por_dia[dia] = []
+        registros_por_dia[dia].append(r)
+
     lista_usuarios = []
+    lista_tiradores = []
     if usuario_logeado == 'ADMIN':
         cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
         lista_usuarios = cur.fetchall()
+        cur.execute("SELECT cedula, nombre, id_alpha_asignado FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 10")
+        lista_tiradores = cur.fetchall()
 
     cur.close()
     conn.close()
 
-    # --- CÁLCULOS PARA KPIS ---
     total_registros = len(registros_globales)
     aciertos = sum(r.get('tiros_acertados', 0) for r in registros_globales)
     fallos = sum(r.get('tiros_fallidos', 0) for r in registros_globales)
     total_disparos = aciertos + fallos
     precision = round((aciertos / total_disparos * 100), 1) if total_disparos > 0 else 0
 
-    # --- CÁLCULOS PARA GRÁFicas ---
     tiradores_nombres = []
     tiradores_aciertos = []
     tiradores_fallos = []
@@ -289,8 +343,6 @@ def index():
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             body { background-color: #f0f2f5; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; color: #000000; }
-            
-            /* Header / Navbar en Blanco y Rojo Estricto */
             .navbar { background: #ffffff; padding: 15px 40px; color: #000000; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid #cc0000; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
             .navbar img { height: 45px; filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.2)); } 
             .user-info { display: flex; align-items: center; gap: 20px; }
@@ -298,50 +350,35 @@ def index():
             .user-info b { color: #000000; font-size: 15px; text-transform: uppercase; }
             .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
             .btn-rojo:hover { background: #000000; }
-            
             .container { padding: 40px; max-width: 1500px; margin: 0 auto; }
-            
-            /* KPIs */
             .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
             .kpi-card { background: #ffffff; padding: 25px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-left: 5px solid #000000; display: flex; flex-direction: column; justify-content: center; }
             .kpi-card:nth-child(1) { border-left-color: #cc0000; }
             .kpi-card:nth-child(3) { border-left-color: #cc0000; }
             .kpi-title { font-size: 12px; color: #555555; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
             .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
-            
-            /* Layout Admin */
+            .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
             .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; margin-bottom: 30px;}
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
-            
-            /* Formularios Admin */
             .form-user { display: flex; flex-direction: column; gap: 15px; }
             .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
             .form-user input:focus { border: 1px solid #cc0000; outline: none; }
-            
-            /* Tablas Blanco/Negro/Rojo Estricto */
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; }
             th, td { padding: 16px; text-align: center; font-size: 12px; }
             th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-weight: bold; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #000000; }
             td { border-bottom: 1px solid #eeeeee; color: #000000; font-weight: 500; }
             tr:hover { background-color: #f9f9f9; }
-            
-            /* Badges Estrictos (Sin verdes/azules) */
+            .day-header { background-color: #f5f5f5 !important; font-weight: bold; color: #cc0000; text-align: left; padding-left: 20px; font-size: 14px; border-top: 2px solid #dddddd;}
             .badge-acierto { background-color: #000000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
             .badge-fallo { background-color: #cc0000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
             .badge-total { background-color: #ffffff; color: #000000; padding: 5px 13px; border-radius: 4px; font-weight: bold; font-size: 13px; border: 2px solid #000000;}
-            
-            /* Inputs de Filtro en Tabla Blancos/Grises */
             .filter-row th { background-color: #f9f9f9; padding: 10px 8px; border-bottom: 2px solid #dddddd; }
             .filter-input { width: 85%; padding: 8px; border: 1px solid #cccccc; border-radius: 4px; background: #ffffff; color: #000000; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase; }
             .filter-input::placeholder { color: #888888; }
             .filter-input:focus { border-color: #cc0000; outline: none; box-shadow: 0 0 5px rgba(204,0,0,0.2); }
-
-            /* Charts */
             .charts-wrapper { display: flex; gap: 30px; height: 250px; }
             .chart-box { flex: 1; position: relative; }
-            
-            /* Admin table compact */
             .admin-table th { background: #f5f5f5; border-bottom: 1px solid #dddddd; font-size: 11px; padding: 10px; }
             .admin-table td { font-size: 11px; padding: 10px; }
             .btn-black-small { background: #000000; color: #ffffff; border: none; border-radius: 4px; padding: 6px 12px; font-weight: bold; font-size: 10px; cursor: pointer; letter-spacing: 1px; }
@@ -358,7 +395,6 @@ def index():
         </div>
         
         <div class="container">
-            <!-- 1. Cajas de KPI -->
             <div class="kpi-grid">
                 <div class="kpi-card">
                     <span class="kpi-title">TOTAL REGISTROS EN NUBE</span>
@@ -378,43 +414,65 @@ def index():
                 </div>
             </div>
 
-            <!-- 2. Sección Exclusiva Admin (Gráficas y Creación de Usuarios) -->
             {% if current_user == 'ADMIN' %}
-            <div class="panel" style="border-top: 4px solid #cc0000;">
-                <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
-                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 40px;">
-                    <div>
-                        <p style="color: #555555; font-size: 11px; margin-bottom: 20px; line-height: 1.5;">Cree un nuevo usuario o sobreescriba uno existente. Asigne el <b>ID EQUIPO</b> para que ese usuario solo vea los datos de su polígono.</p>
-                        <form class="form-user" method="POST" action="/crear_usuario">
-                            <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
-                            <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
-                            <input type="text" name="new_id_alpha" placeholder="ID EQUIPO (Dejar vacío para ver todos)">
-                            <button type="submit" class="btn-rojo" style="padding: 14px;">GUARDAR PERFIL</button>
-                        </form>
-                    </div>
-                    <div style="overflow-y: auto; max-height: 250px; border: 1px solid #eeeeee; border-radius: 4px;">
+            <div class="admin-grid">
+                <!-- Panel 1: Usuarios y Máquinas -->
+                <div class="panel" style="border-top: 4px solid #cc0000;">
+                    <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
+                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Cree un nuevo usuario. Asigne el <b>ID EQUIPO</b> para que ese usuario solo vea los datos de su polígono.</p>
+                    <form class="form-user" method="POST" action="/crear_usuario" style="margin-bottom: 20px;">
+                        <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
+                        <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
+                        <input type="text" name="new_id_alpha" placeholder="ID EQUIPO (Dejar vacío para ver todos)">
+                        <button type="submit" class="btn-rojo" style="padding: 14px;">GUARDAR PERFIL</button>
+                    </form>
+                    <div style="overflow-y: auto; max-height: 150px; border: 1px solid #eeeeee; border-radius: 4px;">
                         <table class="admin-table">
                             <tr>
                                 <th>USUARIO</th>
-                                <th>ID EQUIPO ASIGNADO</th>
-                                <th>CONTRASEÑA</th>
+                                <th>ID EQUIPO</th>
                                 <th>ACCIÓN</th>
                             </tr>
                             {% for u in lista_usuarios %}
                             <tr>
                                 <td style="font-weight:bold; color: #cc0000;">{{ u.username }}</td>
                                 <td>{{ u.id_alpha }}</td>
-                                <td style="color:#aaa;">***</td>
                                 <td>
                                     {% if u.username != 'ADMIN' %}
                                     <form method="POST" action="/borrar_usuario" style="margin:0;">
                                         <input type="hidden" name="username" value="{{ u.username }}">
                                         <button type="submit" class="btn-black-small">BORRAR</button>
                                     </form>
-                                    {% else %}
-                                    <span style="color:#aaa; font-size: 10px;">MAESTRO</span>
                                     {% endif %}
                                 </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Panel 2: Pre-Registro de Tiradores -->
+                <div class="panel" style="border-top: 4px solid #000000;">
+                    <h3>PRE-REGISTRO DE TIRADORES (NUBE A LOCAL)</h3>
+                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Pre-registre un operador. La máquina Alpha descargará estos datos y completará la huella físicamente.</p>
+                    <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
+                        <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" required>
+                        <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" required>
+                        <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34)" required>
+                        <button type="submit" class="btn-rojo" style="background:#000;">ENVIAR A EQUIPO ALPHA</button>
+                    </form>
+                    <div style="overflow-y: auto; max-height: 150px; border: 1px solid #eeeeee; border-radius: 4px;">
+                        <table class="admin-table">
+                            <tr>
+                                <th>CÉDULA</th>
+                                <th>TIRADOR (PENDIENTE DE HUELLA)</th>
+                                <th>DESTINO</th>
+                            </tr>
+                            {% for t in lista_tiradores %}
+                            <tr>
+                                <td style="font-weight:bold;">{{ t.cedula }}</td>
+                                <td>{{ t.nombre }}</td>
+                                <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
                             </tr>
                             {% endfor %}
                         </table>
@@ -435,13 +493,13 @@ def index():
             </div>
             {% endif %}
 
-            <!-- 3. Tabla de Datos Estricta -->
+            <!-- 3. Tabla de Datos -->
             <div class="table-container">
                 <table id="dataTable">
                     <thead>
                         <tr>
-                            <th>ID Equipo</th>
-                            <th>Fecha y Hora</th>
+                            <th>ID Equipo (Usuario)</th>
+                            <th>Hora Exacta</th>
                             <th>Identificación</th>
                             <th>Tirador</th>
                             <th>Misión / Escenario</th>
@@ -450,10 +508,9 @@ def index():
                             <th>Fallos</th>
                             <th>Total</th>
                         </tr>
-                        <!-- FILA DE FILTROS BÚSQUEDA EN TIEMPO REAL -->
                         <tr class="filter-row">
                             <th><input type="text" class="filter-input" data-col="0" placeholder="BUSCAR ID..." onkeyup="filterTable()"></th>
-                            <th><input type="text" class="filter-input" data-col="1" placeholder="BUSCAR FECHA..." onkeyup="filterTable()"></th>
+                            <th><input type="text" class="filter-input" data-col="1" placeholder="BUSCAR HORA..." onkeyup="filterTable()"></th>
                             <th><input type="text" class="filter-input" data-col="2" placeholder="BUSCAR CÉDULA..." onkeyup="filterTable()"></th>
                             <th><input type="text" class="filter-input" data-col="3" placeholder="BUSCAR TIRADOR..." onkeyup="filterTable()"></th>
                             <th><input type="text" class="filter-input" data-col="4" placeholder="BUSCAR MISIÓN..." onkeyup="filterTable()"></th>
@@ -464,19 +521,25 @@ def index():
                         </tr>
                     </thead>
                     <tbody>
-                        {% for r in registros %}
-                        <tr class="data-row">
-                            <td><b>{{ r.id_alpha }}</b></td>
-                            <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 11px; font-weight:bold;">{{ r.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if r.fecha_hora else '' }}</td>
-                            <td style="color: #555555; font-weight: bold;">{{ r.numero_cedula }}</td>
-                            <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
-                            <td style="font-weight: bold;">{{ r.nombre_ejercicio }}</td>
-                            <td style="font-weight: bold;">{{ r.tipo_arma }}</td>
-                            <td><span class="badge-acierto">{{ r.tiros_acertados }}</span></td>
-                            <td><span class="badge-fallo">{{ r.tiros_fallidos }}</span></td>
-                            <!-- COLUMNA TOTAL (Aciertos + Fallos) -->
-                            <td><span class="badge-total">{{ r.tiros_acertados + r.tiros_fallidos }}</span></td>
+                        <!-- AGRUPACIÓN POR DÍAS -->
+                        {% for dia, regs in registros_por_dia.items() %}
+                        <tr>
+                            <td colspan="9" class="day-header">REPORTE DEL DÍA: {{ dia }}</td>
                         </tr>
+                            {% for r in regs %}
+                            <tr class="data-row">
+                                <!-- NUEVO FORMATO DE ID + USUARIO -->
+                                <td style="line-height:1.2;"><b>{{ r.id_alpha }}</b><br><span style="font-size:10px; color:#777;">{{ r.usuario_api }}</span></td>
+                                <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 11px; font-weight:bold;">{{ r.fecha_hora.strftime('%H:%M:%S') if r.fecha_hora else '' }}</td>
+                                <td style="color: #555555; font-weight: bold;">{{ r.numero_cedula }}</td>
+                                <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
+                                <td style="font-weight: bold;">{{ r.nombre_ejercicio }}</td>
+                                <td style="font-weight: bold;">{{ r.tipo_arma }}</td>
+                                <td><span class="badge-acierto">{{ r.tiros_acertados }}</span></td>
+                                <td><span class="badge-fallo">{{ r.tiros_fallidos }}</span></td>
+                                <td><span class="badge-total">{{ r.tiros_acertados + r.tiros_fallidos }}</span></td>
+                            </tr>
+                            {% endfor %}
                         {% else %}
                         <tr class="no-data"><td colspan="9" style="color: #555555; padding: 40px; font-style: italic; font-weight: bold;">NO SE HAN RECIBIDO TRANSMISIONES BALÍSTICAS.</td></tr>
                         {% endfor %}
@@ -487,7 +550,6 @@ def index():
 
         <!-- SCRIPTS JS -->
         <script>
-            // FUNCIÓN DE FILTRADO MULTI-COLUMNA EN TIEMPO REAL
             function filterTable() {
                 const table = document.getElementById('dataTable');
                 const tr = table.querySelectorAll('tbody tr.data-row');
@@ -516,14 +578,12 @@ def index():
 
         {% if current_user == 'ADMIN' %}
         <script>
-            // Datos Inyectados desde Python para Charts
             const aciertosTotales = {{ kpis.aciertos }};
             const fallosTotales = {{ kpis.fallos }};
             const labelsTiradores = {{ charts.nombres | safe }};
             const dataAciertos = {{ charts.aciertos | safe }};
             const dataFallos = {{ charts.fallos | safe }};
 
-            // 1. Gráfica de Dona
             const ctxDona = document.getElementById('hitMissChart').getContext('2d');
             new Chart(ctxDona, {
                 type: 'doughnut',
@@ -545,7 +605,6 @@ def index():
                 }
             });
 
-            // 2. Gráfica de Barras
             const ctxBarras = document.getElementById('barChart').getContext('2d');
             new Chart(ctxBarras, {
                 type: 'bar',
@@ -574,7 +633,6 @@ def index():
     </html>
     """
     
-    # Preparar datos para inyectar en el template HTML
     kpis = {
         "registros": total_registros,
         "disparos": total_disparos,
@@ -588,7 +646,7 @@ def index():
         "fallos": tiradores_fallos
     }
 
-    return render_template_string(html, registros=registros_globales, current_user=session.get('user'), kpis=kpis, charts=charts, lista_usuarios=lista_usuarios)
+    return render_template_string(html, registros_por_dia=registros_por_dia, current_user=session.get('user'), kpis=kpis, charts=charts, lista_usuarios=lista_usuarios, lista_tiradores=lista_tiradores)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
