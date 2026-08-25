@@ -53,7 +53,7 @@ def init_db():
     ''')
     cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'")
 
-    # TABLA: PRE-REGISTRO DE TIRADORES (Datos Biográficos Completos + FOTO + DATOS ADICIONALES ADMIN)
+    # TABLA: PRE-REGISTRO DE TIRADORES
     cur.execute('''
         CREATE TABLE IF NOT EXISTS tiradores_web (
             cedula VARCHAR(50) PRIMARY KEY,
@@ -69,11 +69,14 @@ def init_db():
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD'")
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS foto_b64 TEXT")
     
-    # NUEVAS COLUMNAS (Solo Admin)
+    # NUEVAS COLUMNAS (Admin)
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS correo VARCHAR(100) DEFAULT ''")
     cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS numero_celular VARCHAR(30) DEFAULT ''")
-    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS afinidad_seguridad VARCHAR(100) DEFAULT ''")
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS afinidad_seguridad VARCHAR(150) DEFAULT ''")
     
+    # COLUMNA PARA CONSERVAR EL HISTORIAL Y NO BORRARLO
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS sincronizado BOOLEAN DEFAULT FALSE")
+
     conn.commit()
     cur.close()
     conn.close()
@@ -143,7 +146,6 @@ def recepcion_datos():
     return jsonify({"error": "DATOS INVÁLIDOS"}), 400
 
 # --- 2. ENDPOINT API (Alpha descarga pre-registros pendientes) ---
-# IMPORTANTE: NO SE INCLUYEN celular, correo, ni afinidad aquí para no enviarlos al local
 @app.route('/api/sincronizar_tiradores', methods=['GET'])
 @requires_api_auth
 def sincronizar_tiradores():
@@ -151,14 +153,23 @@ def sincronizar_tiradores():
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, foto_b64 FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS' ORDER BY fecha_creacion ASC", (id_maquina,))
+    
+    # SOLO DESCARGAR LOS QUE NO HAN SIDO SINCRONIZADOS AÚN
+    cur.execute('''
+        SELECT cedula, nombre, sexo, fecha_nacimiento, foto_b64 
+        FROM tiradores_web 
+        WHERE (id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS') 
+        AND sincronizado = FALSE 
+        ORDER BY fecha_creacion ASC
+    ''', (id_maquina,))
+    
     tiradores = cur.fetchall()
     cur.close()
     conn.close()
     
     return jsonify({"status": "ok", "tiradores": tiradores}), 200
 
-# --- 3. ENDPOINT API (Alpha confirma que tomó la huella y lo borra de la web) ---
+# --- 3. ENDPOINT API (Alpha confirma la sincronización. YA NO SE BORRAN) ---
 @app.route('/api/confirmar_tirador', methods=['POST'])
 @requires_api_auth
 def confirmar_tirador():
@@ -166,7 +177,10 @@ def confirmar_tirador():
     if data and data.get("cedula"):
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM tiradores_web WHERE cedula = %s", (data.get("cedula"),))
+        
+        # EN LUGAR DE BORRAR, ACTUALIZAMOS EL ESTADO A SINCRONIZADO
+        cur.execute("UPDATE tiradores_web SET sincronizado = TRUE WHERE cedula = %s", (data.get("cedula"),))
+        
         conn.commit()
         cur.close()
         conn.close()
@@ -205,7 +219,6 @@ def login():
     </head>
     <body>
         <div class="login-box">
-            <!-- LOGO CORREGIDO PARA EVITAR BLOQUEO DE RED -->
             <img src="{{ url_for('static', filename='Logo.png') }}" onerror="this.onerror=null; this.src='https://dummyimage.com/220x60/cc0000/ffffff&text=ALPHA+SECURITY';" alt="Alpha Security" class="logo">
             <p>PORTAL CLOUD SYSTEM</p>
             <form method="POST">
@@ -276,17 +289,17 @@ def registrar_tirador():
         id_asignado = request.form.get('id_asignado', 'TODOS').strip().upper()
         foto_b64 = request.form.get('foto_b64', '')
         
-        # Nuevos campos
         correo = request.form.get('correo', '').strip()
         numero_celular = request.form.get('numero_celular', '').strip()
+        # Ahora es campo de texto abierto
         afinidad_seguridad = request.form.get('afinidad_seguridad', '').strip().upper()
         
         if cedula and nombre:
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, foto_b64, correo, numero_celular, afinidad_seguridad) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) 
+                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, foto_b64, correo, numero_celular, afinidad_seguridad, sincronizado) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE) 
                 ON CONFLICT (cedula) DO UPDATE SET 
                     nombre = EXCLUDED.nombre,
                     sexo = EXCLUDED.sexo,
@@ -295,7 +308,8 @@ def registrar_tirador():
                     foto_b64 = EXCLUDED.foto_b64,
                     correo = EXCLUDED.correo,
                     numero_celular = EXCLUDED.numero_celular,
-                    afinidad_seguridad = EXCLUDED.afinidad_seguridad
+                    afinidad_seguridad = EXCLUDED.afinidad_seguridad,
+                    sincronizado = FALSE
             ''', (cedula, nombre, sexo, fecha_nac, id_asignado, foto_b64, correo, numero_celular, afinidad_seguridad))
             conn.commit()
             cur.close()
@@ -349,10 +363,10 @@ def index():
         cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
         lista_usuarios = cur.fetchall()
         
-        # SELECCIÓN ACTUALIZADA INCLUYENDO LOS NUEVOS CAMPOS Y SIN LÍMITE (TRAE TODOS PARA EL DIRECTORIO)
+        # SELECCIÓN CON TODOS LOS DATOS Y ESTADO DE SINCRONIZACIÓN
         cur.execute('''
             SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado, 
-                   correo, numero_celular, afinidad_seguridad, fecha_creacion, 
+                   correo, numero_celular, afinidad_seguridad, fecha_creacion, sincronizado,
                    (foto_b64 IS NOT NULL AND foto_b64 != '') as tiene_foto 
             FROM tiradores_web 
             ORDER BY fecha_creacion DESC
@@ -392,45 +406,45 @@ def index():
             .user-info b { color: #000000; font-size: 15px; text-transform: uppercase; }
             .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
             .btn-rojo:hover { background: #000000; }
-            .container { padding: 40px; max-width: 1600px; margin: 0 auto; }
+            .container { padding: 40px; max-width: 1700px; margin: 0 auto; }
+            
             .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
             .kpi-card { background: #ffffff; padding: 25px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-left: 5px solid #000000; display: flex; flex-direction: column; justify-content: center; }
             .kpi-card:nth-child(1) { border-left-color: #cc0000; }
             .kpi-card:nth-child(3) { border-left-color: #cc0000; }
             .kpi-title { font-size: 12px; color: #555555; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
             .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
-            .admin-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 30px; margin-bottom: 30px; }
+            
             .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; margin-bottom: 30px;}
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
-            .form-user { display: flex; flex-direction: column; gap: 15px; }
-            .form-user input, .form-user select { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
+            
+            /* NUEVO: Split Panel Layout (Lado a Lado) */
+            .split-panel { display: flex; gap: 30px; flex-wrap: wrap; }
+            .split-left { flex: 1; min-width: 350px; background: #fafafa; padding: 25px; border-radius: 8px; border: 1px solid #e0e0e0; }
+            .split-right { flex: 2.5; background: #ffffff; border-radius: 8px; }
+            
+            .form-user { display: flex; flex-direction: column; gap: 12px; }
+            .form-user input, .form-user select { padding: 10px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; width: 100%; box-sizing: border-box;}
             .form-user input[type="date"] { font-family: 'Segoe UI', Arial, sans-serif; cursor: pointer; text-transform: uppercase;}
             .form-user input:focus, .form-user select:focus { border: 1px solid #cc0000; outline: none; }
             
-            /* TABS CSS */
-            .tabs-container { margin-top: 10px; }
-            .tabs-nav { display: flex; border-bottom: 2px solid #eeeeee; margin-bottom: 20px; }
-            .tab-btn { background: none; border: none; padding: 12px 20px; font-size: 12px; font-weight: bold; color: #777777; cursor: pointer; text-transform: uppercase; transition: color 0.3s; }
-            .tab-btn:hover { color: #000000; }
-            .tab-btn.active { color: #cc0000; border-bottom: 3px solid #cc0000; margin-bottom: -2px; }
-            .tab-content { display: none; animation: fadeEffect 0.5s; }
-            .tab-content.active { display: block; }
-            @keyframes fadeEffect { from {opacity: 0;} to {opacity: 1;} }
-
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; min-width: 800px; }
             th, td { padding: 16px; text-align: center; font-size: 12px; }
             th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-weight: bold; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #000000; }
             td { border-bottom: 1px solid #eeeeee; color: #000000; font-weight: 500; }
             tr:hover { background-color: #f9f9f9; }
-            .day-header { background-color: #f5f5f5 !important; font-weight: bold; color: #cc0000; text-align: left; padding-left: 20px; font-size: 14px; border-top: 2px solid #dddddd;}
+            
             .badge-acierto { background-color: #000000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
             .badge-fallo { background-color: #cc0000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
             .badge-total { background-color: #ffffff; color: #000000; padding: 5px 13px; border-radius: 4px; font-weight: bold; font-size: 13px; border: 2px solid #000000;}
+            
+            .badge-sinc { background: #27ae60; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; letter-spacing: 1px;}
+            .badge-pend { background: #f39c12; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; letter-spacing: 1px;}
+            
             .filter-row th { background-color: #f9f9f9; padding: 10px 8px; border-bottom: 2px solid #dddddd; }
             .filter-input { width: 85%; padding: 8px; border: 1px solid #cccccc; border-radius: 4px; background: #ffffff; color: #000000; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase; }
-            .filter-input::placeholder { color: #888888; }
-            .filter-input:focus { border-color: #cc0000; outline: none; box-shadow: 0 0 5px rgba(204,0,0,0.2); }
+            
             .charts-wrapper { display: flex; gap: 30px; height: 250px; }
             .chart-box { flex: 1; position: relative; }
             .admin-table th { background: #f5f5f5; border-bottom: 1px solid #dddddd; font-size: 11px; padding: 10px; }
@@ -441,7 +455,6 @@ def index():
     </head>
     <body>
         <div class="navbar">
-            <!-- LOGO CORREGIDO PARA EVITAR BLOQUEO DE RED -->
             <img src="{{ url_for('static', filename='Logo.png') }}" onerror="this.onerror=null; this.src='https://dummyimage.com/220x60/cc0000/ffffff&text=ALPHA+SECURITY';" alt="Alpha Security">
             <div class="user-info">
                 <span>CONECTADO COMO: <b>{{ current_user }}</b></span>
@@ -470,18 +483,21 @@ def index():
             </div>
 
             {% if current_user == 'ADMIN' %}
-            <div class="admin-grid">
-                <!-- Panel 1: Usuarios y Máquinas -->
-                <div class="panel" style="border-top: 4px solid #cc0000;">
-                    <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
-                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Cree un nuevo usuario. Asigne el <b>ID EQUIPO</b> para limitar su vista.</p>
-                    <form class="form-user" method="POST" action="/crear_usuario" style="margin-bottom: 20px;">
-                        <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
-                        <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
-                        <input type="text" name="new_id_alpha" placeholder="ID EQUIPO (Dejar vacío para ver todos)">
-                        <button type="submit" class="btn-rojo" style="padding: 14px;">GUARDAR PERFIL</button>
-                    </form>
-                    <div style="overflow-y: auto; max-height: 250px; border: 1px solid #eeeeee; border-radius: 4px;">
+            
+            <!-- PANEL DE USUARIOS (Cuentas) -->
+            <div class="panel" style="border-top: 4px solid #cc0000;">
+                <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
+                <div style="display: flex; gap: 30px;">
+                    <div style="flex: 1;">
+                        <p style="color: #555555; font-size: 11px; margin-bottom: 15px;">Cree un nuevo usuario. Asigne el <b>ID EQUIPO</b> para limitar su vista.</p>
+                        <form class="form-user" method="POST" action="/crear_usuario">
+                            <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
+                            <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
+                            <input type="text" name="new_id_alpha" placeholder="ID EQUIPO (Dejar vacío para ver todos)">
+                            <button type="submit" class="btn-rojo" style="padding: 14px; margin-top: 5px;">GUARDAR PERFIL</button>
+                        </form>
+                    </div>
+                    <div style="flex: 2; overflow-y: auto; max-height: 200px; border: 1px solid #eeeeee; border-radius: 4px;">
                         <table class="admin-table">
                             <tr>
                                 <th>USUARIO</th>
@@ -505,112 +521,107 @@ def index():
                         </table>
                     </div>
                 </div>
+            </div>
 
-                <!-- Panel 2: Pre-Registro de Tiradores ACTUALIZADO CON TABS -->
-                <div class="panel" style="border-top: 4px solid #000000;">
-                    <h3>GESTIÓN DE TIRADORES (PRE-REGISTRO EN LA NUBE)</h3>
+            <!-- NUEVO PANEL DIVIDIDO: PRE-REGISTRO Y DIRECTORIO -->
+            <div class="panel" style="border-top: 4px solid #000000;">
+                <h3>GESTIÓN GLOBAL DE TIRADORES (PRE-REGISTRO)</h3>
+                
+                <div class="split-panel">
                     
-                    <div class="tabs-container">
-                        <!-- Botones Tabs -->
-                        <div class="tabs-nav">
-                            <button class="tab-btn active" onclick="openTab(event, 'tab-form')">NUEVO REGISTRO</button>
-                            <button class="tab-btn" onclick="openTab(event, 'tab-list')">DIRECTORIO COMPLETO</button>
-                        </div>
-
-                        <!-- TAB 1: FORMULARIO -->
-                        <div id="tab-form" class="tab-content active">
-                            <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos completos, fotografía remota e información de contacto del Admin.</p>
-                            
-                            <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
-                                <!-- DATOS BÁSICOS QUE VIAJAN AL LOCAL -->
-                                <div style="display: flex; gap: 15px;">
-                                    <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" style="flex: 1;" required>
-                                    <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" style="flex: 2;" required>
-                                </div>
-
-                                <div style="display: flex; gap: 15px;">
-                                    <select name="sexo" style="flex: 1;">
-                                        <option value="MASCULINO">MASCULINO</option>
-                                        <option value="FEMENINO">FEMENINO</option>
-                                    </select>
-                                    <input type="date" name="fecha_nacimiento" style="flex: 1;" required>
-                                </div>
-                                
-                                <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
-
-                                <!-- DATOS ADICIONALES (SOLO ADMIN WEB) -->
-                                <span style="font-size: 11px; font-weight: bold; color: #cc0000;">DATOS COMPLEMENTARIOS (Uso interno Admin)</span>
-                                <div style="display: flex; gap: 15px;">
-                                    <input type="email" name="correo" placeholder="CORREO ELECTRÓNICO (Opcional)" style="flex: 1;">
-                                    <input type="tel" name="numero_celular" placeholder="NÚMERO CELULAR (Opcional)" style="flex: 1;">
-                                </div>
-                                
-                                <select name="afinidad_seguridad">
-                                    <option value="" disabled selected>NIVEL DE AFINIDAD CON ARMAS/SEGURIDAD</option>
-                                    <option value="NINGUNO">NINGUNO (Civil sin experiencia)</option>
-                                    <option value="BASICO">BÁSICO (Aficionado / Deportivo)</option>
-                                    <option value="INTERMEDIO">INTERMEDIO (Seguridad Privada)</option>
-                                    <option value="AVANZADO">AVANZADO (Fuerzas Armadas / Policiales)</option>
-                                </select>
-
-                                <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
-
-                                <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34 o dejar TODOS)" required>
-                                
-                                <!-- SECCIÓN CÁMARA WEB HTML5 -->
-                                <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin: 15px 0; padding:10px; border:1px solid #dddddd; border-radius:4px; background:#fafafa;">
-                                    <span style="font-size:12px; font-weight:bold;">FOTOGRAFÍA FACIAL (Opcional)</span>
-                                    <video id="webcam" width="280" height="210" autoplay playsinline style="border: 2px solid #cccccc; border-radius: 4px; background:#000000;"></video>
-                                    <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
-                                    <button type="button" id="btn_snap" class="btn-black-small" style="width:280px; padding:12px; font-size:12px;">📸 CAPTURAR FOTO</button>
-                                    <input type="hidden" name="foto_b64" id="foto_b64">
-                                    <span id="foto_status" style="font-size:11px; color:#cc0000; font-weight:bold;">SIN FOTO (Deberá tomarse localmente si se omite)</span>
-                                </div>
-
-                                <button type="submit" class="btn-rojo" style="background:#000000; padding: 16px;">GUARDAR E INYECTAR A EQUIPO ALPHA</button>
-                            </form>
-                        </div>
-
-                        <!-- TAB 2: DIRECTORIO COMPLETO -->
-                        <div id="tab-list" class="tab-content">
-                            <div style="overflow-y: auto; overflow-x: auto; max-height: 600px; border: 1px solid #eeeeee; border-radius: 4px;">
-                                <table class="admin-table" style="min-width: 800px; text-align: center;">
-                                    <tr>
-                                        <th>CREADO EL</th>
-                                        <th>CÉDULA</th>
-                                        <th>TIRADOR</th>
-                                        <th>SEXO / NAC.</th>
-                                        <th>CONTACTO</th>
-                                        <th>AFINIDAD</th>
-                                        <th>FOTO</th>
-                                        <th>DESTINO</th>
-                                        <th>ACCIÓN</th>
-                                    </tr>
-                                    {% for t in lista_tiradores %}
-                                    <tr>
-                                        <td style="font-size: 10px; color:#555555;">{{ t.fecha_creacion.strftime('%Y-%m-%d %H:%M') if t.fecha_creacion else '' }}</td>
-                                        <td style="font-weight:bold;">{{ t.cedula }}</td>
-                                        <td style="text-align: left;">{{ t.nombre }}</td>
-                                        <td>{{ t.sexo }}<br><span style="color:#777777">{{ t.fecha_nacimiento }}</span></td>
-                                        <td>{{ t.correo }}<br><span style="color:#777777">{{ t.numero_celular }}</span></td>
-                                        <td style="font-weight:bold;">{{ t.afinidad_seguridad }}</td>
-                                        <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
-                                            {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
-                                        </td>
-                                        <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
-                                        <td>
-                                            <form method="POST" action="/borrar_tirador" style="margin:0;">
-                                                <input type="hidden" name="cedula" value="{{ t.cedula }}">
-                                                <button type="submit" class="btn-black-small">BORRAR</button>
-                                            </form>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </table>
+                    <!-- LADO IZQUIERDO: FORMULARIO -->
+                    <div class="split-left">
+                        <h4 style="margin-top:0; color:#cc0000; font-size: 14px; border-bottom: 1px solid #ddd; padding-bottom: 8px;">1. NUEVO PRE-REGISTRO</h4>
+                        <form class="form-user" method="POST" action="/registrar_tirador">
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" style="flex: 1;" required>
+                                <input type="text" name="nombre" placeholder="NOMBRES COMPLETOS" style="flex: 2;" required>
                             </div>
-                        </div>
 
-                    </div> <!-- Fin tabs-container -->
+                            <div style="display: flex; gap: 10px;">
+                                <select name="sexo" style="flex: 1;">
+                                    <option value="MASCULINO">MASCULINO</option>
+                                    <option value="FEMENINO">FEMENINO</option>
+                                </select>
+                                <input type="date" name="fecha_nacimiento" style="flex: 1;" required>
+                            </div>
+                            
+                            <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
+                            
+                            <!-- DATOS ADICIONALES (CAMPO ABIERTO) -->
+                            <div style="display: flex; gap: 10px;">
+                                <input type="email" name="correo" placeholder="CORREO ELECTRÓNICO" style="flex: 1;">
+                                <input type="tel" name="numero_celular" placeholder="NÚMERO CELULAR" style="flex: 1;">
+                            </div>
+                            
+                            <!-- AHORA ES UN INPUT TEXT ABIERTO -->
+                            <input type="text" name="afinidad_seguridad" placeholder="AFINIDAD CON LA SEGURIDAD (Ej: Policía, Civil, Escolta...)" style="width: 100%;">
+
+                            <hr style="border: 0; height: 1px; background: #eee; margin: 10px 0;">
+
+                            <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34 o TODOS)" required>
+                            
+                            <!-- SECCIÓN CÁMARA WEB HTML5 -->
+                            <div style="display:flex; flex-direction:column; align-items:center; gap:8px; margin-top: 10px; padding:10px; border:1px solid #dddddd; border-radius:4px; background:#ffffff;">
+                                <span style="font-size:11px; font-weight:bold; color:#555;">FOTOGRAFÍA FACIAL (Opcional)</span>
+                                <video id="webcam" width="100%" height="auto" autoplay playsinline style="border: 2px solid #cccccc; border-radius: 4px; background:#000000; max-height:160px;"></video>
+                                <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+                                <button type="button" id="btn_snap" class="btn-black-small" style="width:100%; padding:10px; font-size:11px;">📸 CAPTURAR FOTO</button>
+                                <input type="hidden" name="foto_b64" id="foto_b64">
+                                <span id="foto_status" style="font-size:10px; color:#cc0000; font-weight:bold;">SIN FOTO (Tomar localmente si se omite)</span>
+                            </div>
+
+                            <button type="submit" class="btn-rojo" style="background:#000000; padding: 14px; margin-top:10px; font-size:13px;">GUARDAR EN DIRECTORIO</button>
+                        </form>
+                    </div>
+
+                    <!-- LADO DERECHO: DIRECTORIO COMPLETO -->
+                    <div class="split-right">
+                        <h4 style="margin-top:0; color:#000000; font-size: 14px; border-bottom: 1px solid #ddd; padding-bottom: 8px;">2. DIRECTORIO COMPLETO (HISTORIAL)</h4>
+                        
+                        <div style="overflow-y: auto; overflow-x: auto; max-height: 550px; border: 1px solid #eeeeee; border-radius: 4px;">
+                            <table class="admin-table" style="min-width: 850px; text-align: center;">
+                                <tr>
+                                    <th>CREADO EL</th>
+                                    <th>CÉDULA</th>
+                                    <th>TIRADOR</th>
+                                    <th>CONTACTO</th>
+                                    <th>AFINIDAD</th>
+                                    <th>FOTO</th>
+                                    <th>DESTINO</th>
+                                    <th>ESTADO</th>
+                                    <th>ACCIÓN</th>
+                                </tr>
+                                {% for t in lista_tiradores %}
+                                <tr>
+                                    <td style="font-size: 10px; color:#555555;">{{ t.fecha_creacion.strftime('%Y-%m-%d %H:%M') if t.fecha_creacion else '' }}</td>
+                                    <td style="font-weight:bold;">{{ t.cedula }}</td>
+                                    <td style="text-align: left;">{{ t.nombre }}<br><span style="color:#777777; font-size:9px;">{{ t.sexo }} | {{ t.fecha_nacimiento }}</span></td>
+                                    <td style="font-size: 10px;">{{ t.correo }}<br><span style="color:#777777">{{ t.numero_celular }}</span></td>
+                                    <td style="font-weight:bold; font-size: 10px;">{{ t.afinidad_seguridad }}</td>
+                                    <td style="font-weight:bold; color:{% if t.tiene_foto %}#27ae60{% else %}#cc0000{% endif %};">
+                                        {% if t.tiene_foto %}SÍ{% else %}NO{% endif %}
+                                    </td>
+                                    <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
+                                    <td>
+                                        {% if t.sincronizado %}
+                                            <span class="badge-sinc">SINCRONIZADO</span>
+                                        {% else %}
+                                            <span class="badge-pend">PENDIENTE</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <form method="POST" action="/borrar_tirador" style="margin:0;">
+                                            <input type="hidden" name="cedula" value="{{ t.cedula }}">
+                                            <button type="submit" class="btn-black-small">BORRAR</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </table>
+                        </div>
+                    </div>
+
                 </div>
             </div>
             
@@ -658,7 +669,7 @@ def index():
                         <!-- AGRUPACIÓN POR DÍAS -->
                         {% for dia, regs in registros_por_dia.items() %}
                         <tr>
-                            <td colspan="9" class="day-header">REPORTE DEL DÍA: {{ dia }}</td>
+                            <td colspan="9" class="day-header" style="background-color: #f5f5f5; font-weight: bold; color: #cc0000; text-align: left; padding-left: 20px; font-size: 14px; border-top: 2px solid #dddddd;">REPORTE DEL DÍA: {{ dia }}</td>
                         </tr>
                             {% for r in regs %}
                             <tr class="data-row">
@@ -683,23 +694,6 @@ def index():
 
         <!-- SCRIPTS JS -->
         <script>
-            // Lógica de Tabs
-            function openTab(evt, tabName) {
-                var i, tabcontent, tablinks;
-                tabcontent = document.getElementsByClassName("tab-content");
-                for (i = 0; i < tabcontent.length; i++) {
-                    tabcontent[i].style.display = "none";
-                    tabcontent[i].classList.remove("active");
-                }
-                tablinks = document.getElementsByClassName("tab-btn");
-                for (i = 0; i < tablinks.length; i++) {
-                    tablinks[i].classList.remove("active");
-                }
-                document.getElementById(tabName).style.display = "block";
-                document.getElementById(tabName).classList.add("active");
-                evt.currentTarget.classList.add("active");
-            }
-
             // Lógica de Filtros de Tabla
             function filterTable() {
                 const table = document.getElementById('dataTable');
