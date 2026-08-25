@@ -9,7 +9,6 @@ app = Flask(__name__)
 app.secret_key = "super_clave_secreta_alpha_2026"
 
 # --- CONEXIÓN A AIVEN (POSTGRESQL) ---
-# CORRECCIÓN: Usamos exactamente el nombre de la variable de entorno configurada en Render
 DB_URI = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
@@ -21,19 +20,24 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
-    # Crear tabla de usuarios web
+    # Crear tabla de usuarios web con asignación de ID EQUIPO
     cur.execute('''
         CREATE TABLE IF NOT EXISTS usuarios (
             username VARCHAR(50) PRIMARY KEY,
-            password VARCHAR(100) NOT NULL
+            password VARCHAR(100) NOT NULL,
+            id_alpha VARCHAR(50) DEFAULT 'TODOS'
         )
     ''')
+    # Actualización automática si la tabla ya existía
+    cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS id_alpha VARCHAR(50) DEFAULT 'TODOS'")
+    
     # Crear administrador por defecto si no existe
     cur.execute('''
-        INSERT INTO usuarios (username, password) 
-        VALUES ('ADMIN', '80406651DETAIMALPHA') 
+        INSERT INTO usuarios (username, password, id_alpha) 
+        VALUES ('ADMIN', '80406651DETAIMALPHA', 'TODOS') 
         ON CONFLICT (username) DO NOTHING
     ''')
+    
     # Crear tabla de registros balísticos
     cur.execute('''
         CREATE TABLE IF NOT EXISTS registros (
@@ -45,13 +49,12 @@ def init_db():
             nombre_ejercicio VARCHAR(150),
             tipo_arma VARCHAR(50),
             tiros_acertados INT,
-            tiros_fallidos INT
+            tiros_fallidos INT,
+            usuario_api VARCHAR(50) DEFAULT 'ADMIN'
         )
     ''')
-    # NUEVO: Añadir columna para vincular el registro al usuario que lo subió
-    cur.execute('''
-        ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'
-    ''')
+    cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'")
+    
     conn.commit()
     cur.close()
     conn.close()
@@ -78,7 +81,7 @@ def requires_api_auth(f):
     def decorated(*args, **kwargs):
         auth = request.authorization
         if not auth or not check_auth(auth.username, auth.password):
-            return jsonify({"error": "No autorizado"}), 401
+            return jsonify({"error": "NO AUTORIZADO"}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -98,7 +101,7 @@ def recepcion_datos():
     data = request.json
     if data:
         fecha_hora = data.get('fecha_hora', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        usuario_actual = request.authorization.username # Detectamos quién lo está subiendo
+        usuario_actual = request.authorization.username
         
         conn = get_db_connection()
         cur = conn.cursor()
@@ -115,13 +118,13 @@ def recepcion_datos():
             data.get('tipo_arma', 'N/A'),
             data.get('tiros_acertados', 0),
             data.get('tiros_fallidos', 0),
-            usuario_actual # Lo guardamos en la nueva columna
+            usuario_actual
         ))
         conn.commit()
         cur.close()
         conn.close()
-        return jsonify({"status": "ok", "mensaje": "Datos guardados en PostgreSQL exitosamente"}), 200
-    return jsonify({"error": "Datos inválidos"}), 400
+        return jsonify({"status": "ok", "mensaje": "DATOS GUARDADOS EN POSTGRESQL EXITOSAMENTE"}), 200
+    return jsonify({"error": "DATOS INVÁLIDOS"}), 400
 
 # --- 2. PÁGINA DE LOGIN HTML ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -134,7 +137,7 @@ def login():
             session['user'] = username
             return redirect(url_for('index'))
         else:
-            error = "Credenciales incorrectas"
+            error = "CREDENCIALES INCORRECTAS"
             
     html = """
     <!DOCTYPE html>
@@ -163,7 +166,7 @@ def login():
             input:focus { border: 2px solid #000000; outline: none; background: #fafafa;}
             button { background: #000000; color: #ffffff; border: none; padding: 16px 20px; width: 100%; border-radius: 6px; font-weight: bold; letter-spacing: 2px; cursor: pointer; margin-top: 20px; font-size: 14px; transition: background 0.3s;}
             button:hover { background: #cc0000; }
-            .error { color: #ffffff; background: #cc0000; padding: 10px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-top: 20px; }
+            .error { color: #ffffff; background: #cc0000; padding: 10px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-top: 20px; letter-spacing: 1px;}
         </style>
     </head>
     <body>
@@ -191,21 +194,40 @@ def logout():
     session.pop('user', None)
     return redirect(url_for('login'))
 
-# --- 3. CREAR NUEVO USUARIO WEB EN AIVEN (Solo ADMIN) ---
+# --- 3. CREAR O EDITAR USUARIO WEB (Solo ADMIN) ---
 @app.route('/crear_usuario', methods=['POST'])
 @login_required
 def crear_usuario():
     if session.get('user') == 'ADMIN':
         new_u = request.form.get('new_user')
         new_p = request.form.get('new_password')
+        new_id = request.form.get('new_id_alpha', '').strip()
+        if not new_id:
+            new_id = 'TODOS'
+            
         if new_u and new_p:
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO usuarios (username, password) 
-                VALUES (%s, %s) 
-                ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password
-            ''', (new_u.upper(), new_p))
+                INSERT INTO usuarios (username, password, id_alpha) 
+                VALUES (%s, %s, %s) 
+                ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password, id_alpha = EXCLUDED.id_alpha
+            ''', (new_u.upper(), new_p, new_id.upper()))
+            conn.commit()
+            cur.close()
+            conn.close()
+    return redirect(url_for('index'))
+
+# --- ELIMINAR USUARIO WEB (Solo ADMIN) ---
+@app.route('/borrar_usuario', methods=['POST'])
+@login_required
+def borrar_usuario():
+    if session.get('user') == 'ADMIN':
+        del_u = request.form.get('username')
+        if del_u and del_u != 'ADMIN':
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM usuarios WHERE username = %s", (del_u,))
             conn.commit()
             cur.close()
             conn.close()
@@ -217,17 +239,28 @@ def crear_usuario():
 def index():
     usuario_logeado = session.get('user')
 
-    # Obtener los registros filtrados desde PostgreSQL
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    if usuario_logeado == 'ADMIN':
+    # Obtener qué ID EQUIPO puede ver este usuario
+    cur.execute("SELECT id_alpha FROM usuarios WHERE username = %s", (usuario_logeado,))
+    user_info = cur.fetchone()
+    user_id_alpha = user_info['id_alpha'] if user_info else 'TODOS'
+
+    # Filtrar registros
+    if usuario_logeado == 'ADMIN' or user_id_alpha == 'TODOS':
         cur.execute("SELECT * FROM registros ORDER BY id DESC")
     else:
-        # Filtramos estrictamente por el usuario conectado
-        cur.execute("SELECT * FROM registros WHERE usuario_api = %s ORDER BY id DESC", (usuario_logeado,))
+        cur.execute("SELECT * FROM registros WHERE id_alpha = %s ORDER BY id DESC", (user_id_alpha,))
         
     registros_globales = cur.fetchall()
+
+    # Si es ADMIN, obtener la lista de perfiles para administrarlos
+    lista_usuarios = []
+    if usuario_logeado == 'ADMIN':
+        cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
+        lista_usuarios = cur.fetchall()
+
     cur.close()
     conn.close()
 
@@ -238,7 +271,7 @@ def index():
     total_disparos = aciertos + fallos
     precision = round((aciertos / total_disparos * 100), 1) if total_disparos > 0 else 0
 
-    # --- CÁLCULOS PARA GRÁFICAS ---
+    # --- CÁLCULOS PARA GRÁFicas ---
     tiradores_nombres = []
     tiradores_aciertos = []
     tiradores_fallos = []
@@ -257,16 +290,16 @@ def index():
         <style>
             body { background-color: #f0f2f5; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; color: #000000; }
             
-            /* Header / Navbar en Blanco y Rojo */
+            /* Header / Navbar en Blanco y Rojo Estricto */
             .navbar { background: #ffffff; padding: 15px 40px; color: #000000; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid #cc0000; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
             .navbar img { height: 45px; filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.2)); } 
             .user-info { display: flex; align-items: center; gap: 20px; }
             .user-info span { font-size: 13px; color: #555555; letter-spacing: 1px; }
-            .user-info b { color: #000000; font-size: 15px; }
+            .user-info b { color: #000000; font-size: 15px; text-transform: uppercase; }
             .btn-rojo { background: #cc0000; color: #ffffff; padding: 10px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 12px; border: none; cursor: pointer; letter-spacing: 1px; transition: background 0.3s;}
             .btn-rojo:hover { background: #000000; }
             
-            .container { padding: 40px; max-width: 1450px; margin: 0 auto; }
+            .container { padding: 40px; max-width: 1500px; margin: 0 auto; }
             
             /* KPIs */
             .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
@@ -277,39 +310,42 @@ def index():
             .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
             
             /* Layout Admin */
-            .admin-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 30px; margin-bottom: 30px; }
-            
-            /* Panels */
-            .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; }
+            .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; margin-bottom: 30px;}
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
             
-            /* Formularios */
+            /* Formularios Admin */
             .form-user { display: flex; flex-direction: column; gap: 15px; }
-            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 13px; color: #000000;}
+            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
             .form-user input:focus { border: 1px solid #cc0000; outline: none; }
             
-            /* Tablas Blanco/Negro/Rojo */
+            /* Tablas Blanco/Negro/Rojo Estricto */
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; }
-            th, td { padding: 16px; text-align: center; font-size: 13px; }
-            th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #000000; }
+            th, td { padding: 16px; text-align: center; font-size: 12px; }
+            th { background-color: #ffffff; color: #000000; text-transform: uppercase; font-weight: bold; letter-spacing: 1px; position: sticky; top: 0; border-bottom: 2px solid #000000; }
             td { border-bottom: 1px solid #eeeeee; color: #000000; font-weight: 500; }
             tr:hover { background-color: #f9f9f9; }
             
-            /* Badges de Impactos */
+            /* Badges Estrictos (Sin verdes/azules) */
             .badge-acierto { background-color: #000000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
             .badge-fallo { background-color: #cc0000; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 13px; }
             .badge-total { background-color: #ffffff; color: #000000; padding: 5px 13px; border-radius: 4px; font-weight: bold; font-size: 13px; border: 2px solid #000000;}
             
-            /* Inputs de Filtro en Tabla sin Emojis */
-            .filter-row th { background-color: #f5f5f5; padding: 10px 8px; border-bottom: 2px solid #dddddd; }
+            /* Inputs de Filtro en Tabla Blancos/Grises */
+            .filter-row th { background-color: #f9f9f9; padding: 10px 8px; border-bottom: 2px solid #dddddd; }
             .filter-input { width: 85%; padding: 8px; border: 1px solid #cccccc; border-radius: 4px; background: #ffffff; color: #000000; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase; }
             .filter-input::placeholder { color: #888888; }
             .filter-input:focus { border-color: #cc0000; outline: none; box-shadow: 0 0 5px rgba(204,0,0,0.2); }
 
             /* Charts */
-            .charts-wrapper { display: flex; gap: 20px; height: 250px; }
+            .charts-wrapper { display: flex; gap: 30px; height: 250px; }
             .chart-box { flex: 1; position: relative; }
+            
+            /* Admin table compact */
+            .admin-table th { background: #f5f5f5; border-bottom: 1px solid #dddddd; font-size: 11px; padding: 10px; }
+            .admin-table td { font-size: 11px; padding: 10px; }
+            .btn-black-small { background: #000000; color: #ffffff; border: none; border-radius: 4px; padding: 6px 12px; font-weight: bold; font-size: 10px; cursor: pointer; letter-spacing: 1px; }
+            .btn-black-small:hover { background: #cc0000; }
         </style>
     </head>
     <body>
@@ -344,32 +380,62 @@ def index():
 
             <!-- 2. Sección Exclusiva Admin (Gráficas y Creación de Usuarios) -->
             {% if current_user == 'ADMIN' %}
-            <div class="admin-grid">
-                <div class="panel" style="border-top: 4px solid #cc0000;">
-                    <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
-                    <p style="color: #555555; font-size: 12px; margin-bottom: 20px;">Añada operadores para acceder al panel. (Guardados en base de datos).</p>
-                    <form class="form-user" method="POST" action="/crear_usuario">
-                        <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
-                        <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
-                        <button type="submit" class="btn-rojo">REGISTRAR ACCESO</button>
-                    </form>
+            <div class="panel" style="border-top: 4px solid #cc0000;">
+                <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 40px;">
+                    <div>
+                        <p style="color: #555555; font-size: 11px; margin-bottom: 20px; line-height: 1.5;">Cree un nuevo usuario o sobreescriba uno existente. Asigne el <b>ID EQUIPO</b> para que ese usuario solo vea los datos de su polígono.</p>
+                        <form class="form-user" method="POST" action="/crear_usuario">
+                            <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
+                            <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
+                            <input type="text" name="new_id_alpha" placeholder="ID EQUIPO (Dejar vacío para ver todos)">
+                            <button type="submit" class="btn-rojo" style="padding: 14px;">GUARDAR PERFIL</button>
+                        </form>
+                    </div>
+                    <div style="overflow-y: auto; max-height: 250px; border: 1px solid #eeeeee; border-radius: 4px;">
+                        <table class="admin-table">
+                            <tr>
+                                <th>USUARIO</th>
+                                <th>ID EQUIPO ASIGNADO</th>
+                                <th>CONTRASEÑA</th>
+                                <th>ACCIÓN</th>
+                            </tr>
+                            {% for u in lista_usuarios %}
+                            <tr>
+                                <td style="font-weight:bold; color: #cc0000;">{{ u.username }}</td>
+                                <td>{{ u.id_alpha }}</td>
+                                <td style="color:#aaa;">***</td>
+                                <td>
+                                    {% if u.username != 'ADMIN' %}
+                                    <form method="POST" action="/borrar_usuario" style="margin:0;">
+                                        <input type="hidden" name="username" value="{{ u.username }}">
+                                        <button type="submit" class="btn-black-small">BORRAR</button>
+                                    </form>
+                                    {% else %}
+                                    <span style="color:#aaa; font-size: 10px;">MAESTRO</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </div>
                 </div>
-                
-                <div class="panel">
-                    <h3>ANÁLISIS DE RENDIMIENTO (Últimas 5 Sesiones)</h3>
-                    <div class="charts-wrapper">
-                        <div class="chart-box">
-                            <canvas id="hitMissChart"></canvas>
-                        </div>
-                        <div class="chart-box" style="flex: 2;">
-                            <canvas id="barChart"></canvas>
-                        </div>
+            </div>
+            
+            <div class="panel">
+                <h3>ANÁLISIS DE RENDIMIENTO (ÚLTIMAS 5 SESIONES)</h3>
+                <div class="charts-wrapper">
+                    <div class="chart-box">
+                        <canvas id="hitMissChart"></canvas>
+                    </div>
+                    <div class="chart-box" style="flex: 2;">
+                        <canvas id="barChart"></canvas>
                     </div>
                 </div>
             </div>
             {% endif %}
 
-            <!-- 3. Tabla de Datos -->
+            <!-- 3. Tabla de Datos Estricta -->
             <div class="table-container">
                 <table id="dataTable">
                     <thead>
@@ -401,7 +467,7 @@ def index():
                         {% for r in registros %}
                         <tr class="data-row">
                             <td><b>{{ r.id_alpha }}</b></td>
-                            <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 12px; font-weight:bold;">{{ r.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if r.fecha_hora else '' }}</td>
+                            <td style="color: #555555; font-family: 'Consolas', monospace; font-size: 11px; font-weight:bold;">{{ r.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if r.fecha_hora else '' }}</td>
                             <td style="color: #555555; font-weight: bold;">{{ r.numero_cedula }}</td>
                             <td style="font-weight: bold; color: #cc0000;">{{ r.nombre }}</td>
                             <td style="font-weight: bold;">{{ r.nombre_ejercicio }}</td>
@@ -522,7 +588,7 @@ def index():
         "fallos": tiradores_fallos
     }
 
-    return render_template_string(html, registros=registros_globales, current_user=session.get('user'), kpis=kpis, charts=charts)
+    return render_template_string(html, registros=registros_globales, current_user=session.get('user'), kpis=kpis, charts=charts, lista_usuarios=lista_usuarios)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
