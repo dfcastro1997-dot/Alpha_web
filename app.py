@@ -139,15 +139,13 @@ def recepcion_datos():
 @app.route('/api/sincronizar_tiradores', methods=['GET'])
 @requires_api_auth
 def sincronizar_tiradores():
-    usuario_actual = request.authorization.username
+    # El ID de la máquina ahora llega por la URL de forma segura
+    id_maquina = request.args.get('id_alpha', 'TODOS')
+    
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    
-    cur.execute("SELECT id_alpha FROM usuarios WHERE username = %s", (usuario_actual,))
-    user_info = cur.fetchone()
-    user_id_alpha = user_info['id_alpha'] if user_info else 'TODOS'
-
-    cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS'", (user_id_alpha,))
+    # Filtramos exactamente por el equipo que lo solicita
+    cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS'", (id_maquina,))
     tiradores = cur.fetchall()
     cur.close()
     conn.close()
