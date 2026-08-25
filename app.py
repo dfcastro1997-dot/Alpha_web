@@ -53,15 +53,19 @@ def init_db():
     ''')
     cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS usuario_api VARCHAR(50) DEFAULT 'ADMIN'")
 
-    # NUEVA TABLA: PRE-REGISTRO DE TIRADORES
+    # NUEVA TABLA: PRE-REGISTRO DE TIRADORES (Datos Biográficos Completos)
     cur.execute('''
         CREATE TABLE IF NOT EXISTS tiradores_web (
             cedula VARCHAR(50) PRIMARY KEY,
             nombre VARCHAR(150) NOT NULL,
+            sexo VARCHAR(20) DEFAULT 'MASCULINO',
+            fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD',
             id_alpha_asignado VARCHAR(50) NOT NULL,
             fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS sexo VARCHAR(20) DEFAULT 'MASCULINO'")
+    cur.execute("ALTER TABLE tiradores_web ADD COLUMN IF NOT EXISTS fecha_nacimiento VARCHAR(20) DEFAULT 'AAAA/MM/DD'")
     
     conn.commit()
     cur.close()
@@ -131,7 +135,7 @@ def recepcion_datos():
         return jsonify({"status": "ok", "mensaje": "DATOS GUARDADOS EN POSTGRESQL EXITOSAMENTE"}), 200
     return jsonify({"error": "DATOS INVÁLIDOS"}), 400
 
-# --- ENDPOINT API (Alpha descarga pre-registros pendientes) ---
+# --- 2. ENDPOINT API (Alpha descarga pre-registros pendientes) ---
 @app.route('/api/sincronizar_tiradores', methods=['GET'])
 @requires_api_auth
 def sincronizar_tiradores():
@@ -139,20 +143,33 @@ def sincronizar_tiradores():
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    # Busca el ID EQUIPO asociado a la cuenta que se conecta
     cur.execute("SELECT id_alpha FROM usuarios WHERE username = %s", (usuario_actual,))
     user_info = cur.fetchone()
     user_id_alpha = user_info['id_alpha'] if user_info else 'TODOS'
 
-    # Descarga los tiradores asignados a su ID
-    cur.execute("SELECT cedula, nombre FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS'", (user_id_alpha,))
+    cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento FROM tiradores_web WHERE id_alpha_asignado = %s OR id_alpha_asignado = 'TODOS'", (user_id_alpha,))
     tiradores = cur.fetchall()
     cur.close()
     conn.close()
     
     return jsonify({"status": "ok", "tiradores": tiradores}), 200
 
-# --- 2. PÁGINA DE LOGIN HTML ---
+# --- 3. ENDPOINT API (Alpha confirma que tomó la huella y lo borra de la web) ---
+@app.route('/api/confirmar_tirador', methods=['POST'])
+@requires_api_auth
+def confirmar_tirador():
+    data = request.json
+    if data and data.get("cedula"):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM tiradores_web WHERE cedula = %s", (data.get("cedula"),))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"}), 200
+    return jsonify({"error": "Falta cedula"}), 400
+
+# --- PÁGINA DE LOGIN HTML ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error = None
@@ -171,21 +188,8 @@ def login():
     <head>
         <title>Login | Alpha Security</title>
         <style>
-            body { 
-                background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.85)), url('https://i.ibb.co/LDmTGmGn/datos.png') no-repeat center center fixed; 
-                background-size: cover;
-                font-family: 'Segoe UI', Arial, sans-serif; 
-                display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; color: #ffffff; 
-            }
-            .login-box { 
-                background: rgba(255, 255, 255, 0.95); 
-                padding: 50px 40px; 
-                border-top: 6px solid #cc0000; 
-                border-radius: 12px; 
-                width: 350px; 
-                text-align: center; 
-                box-shadow: 0 15px 35px rgba(0,0,0,0.5); 
-            }
+            body { background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.85)), url('https://i.ibb.co/LDmTGmGn/datos.png') no-repeat center center fixed; background-size: cover; font-family: 'Segoe UI', Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; color: #ffffff; }
+            .login-box { background: rgba(255, 255, 255, 0.95); padding: 50px 40px; border-top: 6px solid #cc0000; border-radius: 12px; width: 350px; text-align: center; box-shadow: 0 15px 35px rgba(0,0,0,0.5); }
             .logo { width: 220px; margin-bottom: 20px; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.3)); }
             p { color: #000000; font-size: 14px; font-weight: bold; margin-bottom: 25px; letter-spacing: 1px; }
             input { width: 90%; padding: 14px; margin: 10px 0; border: 2px solid #dddddd; border-radius: 6px; font-weight: bold; text-align: center; font-size: 14px; color: #000000;}
@@ -205,9 +209,7 @@ def login():
                 <button type="submit">INICIAR SESIÓN</button>
             </form>
             {% if error %}
-            <div class="error">
-                <span style="font-weight:bold;">ERROR:</span> {{ error }}
-            </div>
+            <div class="error"><span style="font-weight:bold;">ERROR:</span> {{ error }}</div>
             {% endif %}
         </div>
     </body>
@@ -220,7 +222,7 @@ def logout():
     session.pop('user', None)
     return redirect(url_for('login'))
 
-# --- 3. CREAR O EDITAR USUARIO WEB (Solo ADMIN) ---
+# --- CREAR O EDITAR USUARIO WEB (Solo ADMIN) ---
 @app.route('/crear_usuario', methods=['POST'])
 @login_required
 def crear_usuario():
@@ -228,8 +230,7 @@ def crear_usuario():
         new_u = request.form.get('new_user')
         new_p = request.form.get('new_password')
         new_id = request.form.get('new_id_alpha', '').strip()
-        if not new_id:
-            new_id = 'TODOS'
+        if not new_id: new_id = 'TODOS'
             
         if new_u and new_p:
             conn = get_db_connection()
@@ -265,22 +266,42 @@ def registrar_tirador():
     if session.get('user') == 'ADMIN':
         cedula = request.form.get('cedula').strip()
         nombre = request.form.get('nombre').strip().upper()
+        sexo = request.form.get('sexo', 'MASCULINO').strip().upper()
+        fecha_nac = request.form.get('fecha_nacimiento', 'AAAA/MM/DD').strip()
         id_asignado = request.form.get('id_asignado', 'TODOS').strip().upper()
         
         if cedula and nombre:
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute('''
-                INSERT INTO tiradores_web (cedula, nombre, id_alpha_asignado) 
-                VALUES (%s, %s, %s) 
-                ON CONFLICT (cedula) DO UPDATE SET nombre = EXCLUDED.nombre, id_alpha_asignado = EXCLUDED.id_alpha_asignado
-            ''', (cedula, nombre, id_asignado))
+                INSERT INTO tiradores_web (cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado) 
+                VALUES (%s, %s, %s, %s, %s) 
+                ON CONFLICT (cedula) DO UPDATE SET 
+                    nombre = EXCLUDED.nombre,
+                    sexo = EXCLUDED.sexo,
+                    fecha_nacimiento = EXCLUDED.fecha_nacimiento,
+                    id_alpha_asignado = EXCLUDED.id_alpha_asignado
+            ''', (cedula, nombre, sexo, fecha_nac, id_asignado))
             conn.commit()
             cur.close()
             conn.close()
     return redirect(url_for('index'))
 
-# --- 4. DASHBOARD ---
+@app.route('/borrar_tirador', methods=['POST'])
+@login_required
+def borrar_tirador():
+    if session.get('user') == 'ADMIN':
+        cedula = request.form.get('cedula')
+        if cedula:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM tiradores_web WHERE cedula = %s", (cedula,))
+            conn.commit()
+            cur.close()
+            conn.close()
+    return redirect(url_for('index'))
+
+# --- DASHBOARD ---
 @app.route('/', methods=['GET'])
 @login_required
 def index():
@@ -300,10 +321,8 @@ def index():
         
     registros_globales = cur.fetchall()
 
-    # --- AGRUPACIÓN POR DÍAS (NUEVO) ---
     registros_por_dia = {}
     for r in registros_globales:
-        # Extraemos solo la fecha (YYYY-MM-DD)
         dia = r['fecha_hora'].strftime('%Y-%m-%d') if r['fecha_hora'] else 'FECHA DESCONOCIDA'
         if dia not in registros_por_dia:
             registros_por_dia[dia] = []
@@ -314,7 +333,7 @@ def index():
     if usuario_logeado == 'ADMIN':
         cur.execute("SELECT username, id_alpha FROM usuarios ORDER BY username ASC")
         lista_usuarios = cur.fetchall()
-        cur.execute("SELECT cedula, nombre, id_alpha_asignado FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 10")
+        cur.execute("SELECT cedula, nombre, sexo, fecha_nacimiento, id_alpha_asignado FROM tiradores_web ORDER BY fecha_creacion DESC LIMIT 15")
         lista_tiradores = cur.fetchall()
 
     cur.close()
@@ -357,12 +376,12 @@ def index():
             .kpi-card:nth-child(3) { border-left-color: #cc0000; }
             .kpi-title { font-size: 12px; color: #555555; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
             .kpi-value { font-size: 32px; font-weight: bold; color: #000000; margin: 0; font-family: 'Consolas', monospace; }
-            .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+            .admin-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; margin-bottom: 30px; }
             .panel { background: #ffffff; padding: 30px; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eeeeee; margin-bottom: 30px;}
             .panel h3 { margin-top: 0; color: #000000; font-size: 15px; letter-spacing: 1px; border-bottom: 2px solid #eeeeee; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
             .form-user { display: flex; flex-direction: column; gap: 15px; }
-            .form-user input { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
-            .form-user input:focus { border: 1px solid #cc0000; outline: none; }
+            .form-user input, .form-user select { padding: 12px; border: 1px solid #cccccc; border-radius: 4px; font-weight: bold; font-size: 12px; color: #000000; }
+            .form-user input:focus, .form-user select:focus { border: 1px solid #cc0000; outline: none; }
             .table-container { overflow-x: auto; background: #ffffff; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 4px solid #000000; }
             table { width: 100%; border-collapse: collapse; }
             th, td { padding: 16px; text-align: center; font-size: 12px; }
@@ -419,7 +438,7 @@ def index():
                 <!-- Panel 1: Usuarios y Máquinas -->
                 <div class="panel" style="border-top: 4px solid #cc0000;">
                     <h3 style="color: #cc0000;">GESTIÓN DE PERFILES WEB</h3>
-                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Cree un nuevo usuario. Asigne el <b>ID EQUIPO</b> para que ese usuario solo vea los datos de su polígono.</p>
+                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Cree un nuevo usuario. Asigne el <b>ID EQUIPO</b> para limitar su vista.</p>
                     <form class="form-user" method="POST" action="/crear_usuario" style="margin-bottom: 20px;">
                         <input type="text" name="new_user" placeholder="NUEVO USUARIO" required>
                         <input type="password" name="new_password" placeholder="CONTRASEÑA" required>
@@ -454,10 +473,17 @@ def index():
                 <!-- Panel 2: Pre-Registro de Tiradores -->
                 <div class="panel" style="border-top: 4px solid #000000;">
                     <h3>PRE-REGISTRO DE TIRADORES (NUBE A LOCAL)</h3>
-                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Pre-registre un operador. La máquina Alpha descargará estos datos y completará la huella físicamente.</p>
+                    <p style="color: #555555; font-size: 11px; margin-bottom: 20px;">Datos biográficos para que la máquina Alpha complete foto/huella.</p>
                     <form class="form-user" method="POST" action="/registrar_tirador" style="margin-bottom: 20px;">
                         <input type="text" name="cedula" placeholder="NÚMERO DE CÉDULA" required>
                         <input type="text" name="nombre" placeholder="NOMBRES Y APELLIDOS COMPLETOS" required>
+                        <div style="display: flex; gap: 15px;">
+                            <select name="sexo" style="flex: 1;">
+                                <option value="MASCULINO">MASCULINO</option>
+                                <option value="FEMENINO">FEMENINO</option>
+                            </select>
+                            <input type="text" name="fecha_nacimiento" placeholder="FECHA NAC. (AAAA/MM/DD)" style="flex: 1;" required>
+                        </div>
                         <input type="text" name="id_asignado" placeholder="ID EQUIPO DESTINO (Ej: B5CD2CBD34)" required>
                         <button type="submit" class="btn-rojo" style="background:#000;">ENVIAR A EQUIPO ALPHA</button>
                     </form>
@@ -466,13 +492,22 @@ def index():
                             <tr>
                                 <th>CÉDULA</th>
                                 <th>TIRADOR (PENDIENTE DE HUELLA)</th>
+                                <th>SEXO / NAC.</th>
                                 <th>DESTINO</th>
+                                <th>ACCIÓN</th>
                             </tr>
                             {% for t in lista_tiradores %}
                             <tr>
                                 <td style="font-weight:bold;">{{ t.cedula }}</td>
                                 <td>{{ t.nombre }}</td>
+                                <td>{{ t.sexo }}<br><span style="color:#777">{{ t.fecha_nacimiento }}</span></td>
                                 <td style="color:#cc0000; font-weight:bold;">{{ t.id_alpha_asignado }}</td>
+                                <td>
+                                    <form method="POST" action="/borrar_tirador" style="margin:0;">
+                                        <input type="hidden" name="cedula" value="{{ t.cedula }}">
+                                        <button type="submit" class="btn-black-small">BORRAR</button>
+                                    </form>
+                                </td>
                             </tr>
                             {% endfor %}
                         </table>
